@@ -1,0 +1,1 @@
+"""Keyword trends API application."""

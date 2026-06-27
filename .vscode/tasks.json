@@ -1,0 +1,81 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "month",
+      "type": "promptString",
+      "description": "Month to process, for example 2025-05"
+    },
+    {
+      "id": "marketplace",
+      "type": "promptString",
+      "description": "Marketplace",
+      "default": "UK"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "API: start backend",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Web: start frontend",
+      "type": "shell",
+      "command": "npm.cmd run dev -- --host 127.0.0.1 --port 8000",
+      "options": {
+        "cwd": "${workspaceFolder}\\frontend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Data: inspect month",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe scripts\\inspect_csv.py --input \"D:\\PostgreSQL\\data\\aba数据\\${input:month}\" --output \"data\\reports\\${input:month}-inspect.json\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Data: import month",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe scripts\\import_csv.py --month ${input:month} --marketplace ${input:marketplace} --input \"D:\\PostgreSQL\\data\\aba数据\\${input:month}\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Data: calculate trends for month",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe scripts\\calculate_trends.py --analysis-month ${input:month} --marketplace ${input:marketplace}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Data: calculate all trends",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe scripts\\calculate_trends.py --all --marketplace ${input:marketplace}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Data: check import summary",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe scripts\\check_import_summary.py",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
