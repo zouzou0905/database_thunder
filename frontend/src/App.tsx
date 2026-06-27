@@ -108,7 +108,7 @@ const DEFAULT_COMPARE_FILTERS: KeywordCompareFilters = {
   marketplace: "UK",
   keyword: "",
   category: "",
-  trend_type: "continuous",
+  trend_type: "",
   search_volume_min: "1000",
   search_volume_max: "",
   growth_rate_min: "",
@@ -120,15 +120,11 @@ const DEFAULT_COMPARE_FILTERS: KeywordCompareFilters = {
 
 const compareTrendOptions: SelectOption[] = [
   { value: "", label: "全部类型" },
-  { value: "continuous", label: "连续出现" },
-  { value: "continuous_rising", label: "连续上升" },
-  { value: "rising", label: "明显上升" },
-  { value: "stable", label: "相对稳定" },
-  { value: "new", label: "区间新出现" },
-  { value: "reappeared", label: "区间回归" },
-  { value: "continuous_falling", label: "连续下降" },
-  { value: "falling", label: "明显下降" },
-  { value: "volatile", label: "波动观察" },
+  { value: "rising", label: "上升型" },
+  { value: "falling", label: "下降型" },
+  { value: "stable", label: "常年稳定型" },
+  { value: "seasonal", label: "季节型" },
+  { value: "volatile", label: "波动型" },
 ];
 
 const compareSortOptions: SelectOption[] = [
@@ -1366,9 +1362,7 @@ export function App() {
                     <tr>
                       <th>关键词</th>
                       <th>类目</th>
-                      {compareMonths.map((month) => (
-                        <th key={month}>{formatMonth(month)}搜索量</th>
-                      ))}
+                      <th className="sparkline-th">趋势图</th>
                       <th>增长率</th>
                       <th>排名变化</th>
                       <th>出现月数</th>
@@ -1376,26 +1370,30 @@ export function App() {
                       <th>历史排名参考</th>
                       <th>状态</th>
                       <th>操作</th>
+                      {compareMonths.map((month) => (
+                        <th key={month} className="monthly-col">{formatMonth(month)}搜索量</th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
                     {compareLoading ? (
                       Array.from({ length: 8 }).map((_, index) => (
                         <tr key={index}>
-                          <td colSpan={10 + compareMonths.length}>
+                          <td colSpan={11 + compareMonths.length}>
                             <div className="skeleton" />
                           </td>
                         </tr>
                       ))
                     ) : compareItems.length === 0 ? (
                       <tr>
-                        <td colSpan={10 + compareMonths.length} className="empty-cell">
+                        <td colSpan={11 + compareMonths.length} className="empty-cell">
                           没有符合条件的横向对比关键词
                         </td>
                       </tr>
                     ) : (
                       compareItems.map((item) => {
                         const monthlyMap = new Map(item.monthly.map((month) => [month.data_month.slice(0, 10), month]));
+                        const volumes = compareMonths.map((m) => monthlyMap.get(m)?.search_volume ?? null);
                         return (
                           <tr key={`${item.keyword_id}-${item.marketplace}`}>
                             <td className="keyword-cell">
@@ -1405,10 +1403,9 @@ export function App() {
                               <span>{item.keyword_translation || "-"}</span>
                             </td>
                             <td className="muted-cell">{item.category || "-"}</td>
-                            {compareMonths.map((month) => {
-                              const row = monthlyMap.get(month);
-                              return <td key={month}>{formatNumber(row?.search_volume)}</td>;
-                            })}
+                            <td className="sparkline-cell">
+                              <Sparkline volumes={volumes} width={120} height={32} />
+                            </td>
                             <td>
                               <strong className={(item.search_volume_growth_rate ?? 0) >= 0 ? "positive" : "negative"}>
                                 {formatGrowthPercent(item.search_volume_growth_rate)}
@@ -1435,8 +1432,14 @@ export function App() {
                             <td>
                               <Tag
                                 tone={
-                                  item.trend_type.includes("rising") || item.trend_type === "continuous"
+                                  item.trend_type === "rising"
                                     ? "success"
+                                    : item.trend_type === "falling"
+                                    ? "danger"
+                                    : item.trend_type === "stable"
+                                    ? "info"
+                                    : item.trend_type === "seasonal"
+                                    ? "warning"
                                     : "neutral"
                                 }
                               >
@@ -1471,6 +1474,10 @@ export function App() {
                                 </button>
                               </div>
                             </td>
+                            {compareMonths.map((month) => {
+                              const row = monthlyMap.get(month);
+                              return <td key={month} className="monthly-col">{formatNumber(row?.search_volume)}</td>;
+                            })}
                           </tr>
                         );
                       })
@@ -1875,6 +1882,43 @@ export function App() {
   );
 }
 
+function Sparkline({ volumes, width, height }: { volumes: (number | null)[]; width: number; height: number }) {
+  const valid = volumes.filter((v): v is number => v !== null && v > 0);
+  if (valid.length < 2) {
+    return <span className="sparkline-empty">-</span>;
+  }
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const range = max - min || 1; // avoid division by zero
+  const pad = 3; // top/bottom padding in px
+  const h = height - pad * 2;
+  const stepX = valid.length > 1 ? (width - 4) / (valid.length - 1) : 0;
+  const points = valid
+    .map((v, i) => {
+      const x = 2 + i * stepX;
+      const y = pad + h - ((v - min) / range) * h;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} width={width} height={height}>
+      <polyline
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points}
+      />
+      {valid.map((v, i) => {
+        const x = 2 + i * stepX;
+        const y = pad + h - ((v - min) / range) * h;
+        return <circle key={i} cx={x} cy={y} r="2" fill="var(--accent)" />;
+      })}
+    </svg>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="field">
@@ -1893,6 +1937,6 @@ function Metric({ label, value, compact = false }: { label: string; value: strin
   );
 }
 
-function Tag({ children, tone }: { children: React.ReactNode; tone: "success" | "neutral" }) {
+function Tag({ children, tone }: { children: React.ReactNode; tone: "success" | "neutral" | "danger" | "warning" | "info" }) {
   return <span className={`tag ${tone}`}>{children}</span>;
 }

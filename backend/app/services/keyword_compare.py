@@ -18,15 +18,11 @@ SORT_COLUMNS = {
 }
 
 TREND_LABELS_CN = {
-    "new": "区间新出现",
-    "reappeared": "区间回归",
-    "continuous_rising": "连续上升",
-    "rising": "明显上升",
-    "continuous_falling": "连续下降",
-    "falling": "明显下降",
-    "stable": "相对稳定",
-    "continuous": "连续出现",
-    "volatile": "波动观察",
+    "rising": "上升型",
+    "falling": "下降型",
+    "stable": "常年稳定型",
+    "seasonal": "季节型",
+    "volatile": "波动型",
 }
 
 

@@ -4,6 +4,13 @@ The compare query aggregates keyword_monthly_metrics across multiple months
 with window functions, JSONB_AGG, and correlated EXISTS subqueries — far too
 heavy for real-time API use.  This module mirrors the product-selection cache
 pattern: a materialized table refreshed after each trend calculation run.
+
+Classification (5-category system, based on ALL months of data):
+    rising   — clear upward trend (≥4 data points, positive slope, R² ≥ 0.25)
+    falling  — clear downward trend (≥4 data points, negative slope, R² ≥ 0.25)
+    stable   — appears in most months (≥5), low CV (<0.25), no strong trend
+    seasonal — gappy pattern (1-4 missing months), irregular but not rare
+    volatile — everything else that doesn't fit the above
 """
 
 from __future__ import annotations
@@ -164,156 +171,134 @@ def refresh_compare_snapshot(
             params,
         )
 
-        # ── Step 7: trend_type for keywords that existed before range ───
-        range_params = {**params, "range_start": range_start, "range_end": range_end}
+        # ── Step 6.5: statistical metrics from monthly JSONB ──────────────
+        # Compute per-keyword stats across all available months:
+        #   avg_search_volume, stddev, CV, linear regression slope & R², gap_count.
+        # These feed into the 5-category classification in Step 7.
         cur.execute(
             """
+            WITH unnested AS (
+                SELECT
+                    s.keyword_id,
+                    s.marketplace,
+                    s.total_months,
+                    (elem->>'search_volume')::numeric AS search_volume,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.keyword_id, s.marketplace
+                        ORDER BY (elem->>'data_month')::date
+                    ) AS month_idx
+                FROM keyword_compare_snapshot s
+                CROSS JOIN LATERAL jsonb_array_elements(s.monthly) AS elem
+                WHERE s.marketplace = %(marketplace)s
+            ),
+            stats AS (
+                SELECT
+                    keyword_id,
+                    marketplace,
+                    MAX(total_months) AS total_months,
+                    COUNT(*) FILTER (WHERE search_volume IS NOT NULL) AS actual_count,
+                    AVG(search_volume) FILTER (WHERE search_volume IS NOT NULL) AS avg_vol,
+                    STDDEV(search_volume) FILTER (WHERE search_volume IS NOT NULL) AS stddev_vol,
+                    REGR_SLOPE(search_volume, month_idx) AS vol_slope,
+                    REGR_R2(search_volume, month_idx) AS vol_r2
+                FROM unnested
+                GROUP BY keyword_id, marketplace
+            )
             UPDATE keyword_compare_snapshot s
             SET
-                trend_type = CASE
-                    WHEN s.first_month = %(range_end)s::date
-                         AND hb.keyword_id IS NULL THEN 'new'
-                    WHEN s.first_month > %(range_start)s::date
-                         AND hb.keyword_id IS NOT NULL THEN 'reappeared'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN 'continuous_rising'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN 'rising'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN 'continuous_falling'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN 'falling'
-                    WHEN s.month_count >= 3
-                         AND s.start_search_volume > 0
-                         AND ABS((s.end_search_volume - s.start_search_volume)
-                                 / s.start_search_volume::numeric) < 0.10
-                        THEN 'stable'
-                    WHEN s.month_count = s.total_months THEN 'continuous'
-                    ELSE 'volatile'
+                avg_search_volume    = ms.avg_vol,
+                stddev_search_volume = ms.stddev_vol,
+                cv_search_volume     = CASE
+                    WHEN ms.avg_vol > 0 THEN ms.stddev_vol / ms.avg_vol
                 END,
-                trend_type_cn = CASE
-                    WHEN s.first_month = %(range_end)s::date
-                         AND hb.keyword_id IS NULL THEN '区间新出现'
-                    WHEN s.first_month > %(range_start)s::date
-                         AND hb.keyword_id IS NOT NULL THEN '区间回归'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN '连续上升'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN '明显上升'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN '连续下降'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN '明显下降'
-                    WHEN s.month_count >= 3
-                         AND s.start_search_volume > 0
-                         AND ABS((s.end_search_volume - s.start_search_volume)
-                                 / s.start_search_volume::numeric) < 0.10
-                        THEN '相对稳定'
-                    WHEN s.month_count = s.total_months THEN '连续出现'
-                    ELSE '波动观察'
-                END
-            FROM (
-                SELECT DISTINCT keyword_id
-                FROM keyword_monthly_metrics
-                WHERE marketplace = %(marketplace)s
-                  AND data_month < %(range_start)s::date
-            ) hb
-            WHERE s.keyword_id = hb.keyword_id
+                volume_slope         = ms.vol_slope,
+                volume_r2            = ms.vol_r2,
+                gap_count            = ms.total_months - ms.actual_count
+            FROM stats ms
+            WHERE s.keyword_id  = ms.keyword_id
+              AND s.marketplace = ms.marketplace
               AND s.marketplace = %(marketplace)s
             """,
-            range_params,
+            params,
         )
 
-        # ── Step 8: trend_type for keywords NOT existing before range ───
+        # ── Step 7: 5-category classification ──────────────────────────────
+        # Priority order (first match wins):
+        #   1. rising    — clear upward growth, linear fit
+        #   2. falling   — clear downward decline, linear fit
+        #   3. stable    — appears in most months, low volatility, no trend
+        #   4. seasonal  — gappy pattern, irregular but not rare
+        #   5. volatile  — everything else
         cur.execute(
             """
-            UPDATE keyword_compare_snapshot s
+            UPDATE keyword_compare_snapshot
             SET
                 trend_type = CASE
-                    WHEN s.first_month = %(range_end)s::date THEN 'new'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN 'continuous_rising'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
+                    -- 上升型: ≥4 data points, positive slope, meaningful & linear
+                    WHEN month_count >= 4
+                         AND avg_search_volume > 0
+                         AND volume_slope > 0
+                         AND volume_slope / avg_search_volume > 0.05
+                         AND volume_r2 >= 0.25
                         THEN 'rising'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN 'continuous_falling'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
+                    -- 下降型: ≥4 data points, negative slope, meaningful & linear
+                    WHEN month_count >= 4
+                         AND avg_search_volume > 0
+                         AND volume_slope < 0
+                         AND ABS(volume_slope) / avg_search_volume > 0.05
+                         AND volume_r2 >= 0.25
                         THEN 'falling'
-                    WHEN s.month_count >= 3
-                         AND s.start_search_volume > 0
-                         AND ABS((s.end_search_volume - s.start_search_volume)
-                                 / s.start_search_volume::numeric) < 0.10
+                    -- 常年稳定型: ≥5 months, meaningful volume, low CV, no strong trend
+                    WHEN month_count >= 5
+                         AND avg_search_volume >= 100
+                         AND cv_search_volume IS NOT NULL
+                         AND cv_search_volume < 0.25
+                         AND (volume_slope IS NULL
+                              OR ABS(volume_slope) / NULLIF(avg_search_volume, 0) < 0.05)
                         THEN 'stable'
-                    WHEN s.month_count = s.total_months THEN 'continuous'
+                    -- 季节型: has gaps (1~4 absent months), ≥3 appearances, irregular
+                    WHEN gap_count BETWEEN 1 AND 4
+                         AND month_count >= 3
+                         AND avg_search_volume >= 100
+                         AND (cv_search_volume >= 0.25
+                              OR cv_search_volume IS NULL
+                              OR volume_r2 < 0.25)
+                        THEN 'seasonal'
+                    -- 波动型: fallthrough
                     ELSE 'volatile'
                 END,
                 trend_type_cn = CASE
-                    WHEN s.first_month = %(range_end)s::date THEN '区间新出现'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN '连续上升'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) >= 0.20
-                        THEN '明显上升'
-                    WHEN s.month_count = s.total_months
-                         AND s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN '连续下降'
-                    WHEN s.start_search_volume > 0
-                         AND ((s.end_search_volume - s.start_search_volume)
-                              / s.start_search_volume::numeric) <= -0.20
-                        THEN '明显下降'
-                    WHEN s.month_count >= 3
-                         AND s.start_search_volume > 0
-                         AND ABS((s.end_search_volume - s.start_search_volume)
-                                 / s.start_search_volume::numeric) < 0.10
-                        THEN '相对稳定'
-                    WHEN s.month_count = s.total_months THEN '连续出现'
-                    ELSE '波动观察'
+                    WHEN month_count >= 4
+                         AND avg_search_volume > 0
+                         AND volume_slope > 0
+                         AND volume_slope / avg_search_volume > 0.05
+                         AND volume_r2 >= 0.25
+                        THEN '上升型'
+                    WHEN month_count >= 4
+                         AND avg_search_volume > 0
+                         AND volume_slope < 0
+                         AND ABS(volume_slope) / avg_search_volume > 0.05
+                         AND volume_r2 >= 0.25
+                        THEN '下降型'
+                    WHEN month_count >= 5
+                         AND avg_search_volume >= 100
+                         AND cv_search_volume IS NOT NULL
+                         AND cv_search_volume < 0.25
+                         AND (volume_slope IS NULL
+                              OR ABS(volume_slope) / NULLIF(avg_search_volume, 0) < 0.05)
+                        THEN '常年稳定型'
+                    WHEN gap_count BETWEEN 1 AND 4
+                         AND month_count >= 3
+                         AND avg_search_volume >= 100
+                         AND (cv_search_volume >= 0.25
+                              OR cv_search_volume IS NULL
+                              OR volume_r2 < 0.25)
+                        THEN '季节型'
+                    ELSE '波动型'
                 END
-            WHERE s.marketplace = %(marketplace)s
-              AND s.keyword_id NOT IN (
-                  SELECT DISTINCT keyword_id
-                  FROM keyword_monthly_metrics
-                  WHERE marketplace = %(marketplace)s
-                    AND data_month < %(range_start)s::date
-              )
+            WHERE marketplace = %(marketplace)s
             """,
-            range_params,
+            params,
         )
 
         # ── Clean up ────────────────────────────────────────────────────

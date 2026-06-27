@@ -859,6 +859,33 @@ tbody tr:hover {
   white-space: normal;
 }
 
+.sparkline-th {
+  width: 130px;
+  text-align: center;
+}
+
+.sparkline-cell {
+  padding: 2px 6px !important;
+  text-align: center;
+}
+
+.sparkline {
+  vertical-align: middle;
+  display: inline-block;
+}
+
+.sparkline-empty {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.compare-table .monthly-col {
+  min-width: 72px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  text-align: right;
+}
+
 .empty-cell {
   height: 92px;
   color: var(--muted-foreground);
@@ -884,6 +911,21 @@ tbody tr:hover {
 .tag.neutral {
   color: #515154;
   background: #f1f1f3;
+}
+
+.tag.danger {
+  color: var(--danger);
+  background: #fde8e8;
+}
+
+.tag.warning {
+  color: var(--warning);
+  background: #fff3e6;
+}
+
+.tag.info {
+  color: var(--accent);
+  background: #e8f0fe;
 }
 
 .level {

@@ -25,12 +25,9 @@ const candidateCache = new Map<string, CacheEntry<CandidateListResponse>>();
 const compareCache = new Map<string, CacheEntry<KeywordCompareResponse>>();
 const categoryCache = new Map<string, CacheEntry<{ items: CategoryItem[] }>>();
 
-/** Build a cache key from filters, ignoring pagination so page changes don't miss. */
+/** Build a cache key from filters. Page is included so each page caches independently. */
 function filtersCacheKey(params: URLSearchParams): string {
-  const stable = new URLSearchParams(params);
-  stable.delete("page");
-  stable.delete("page_size");
-  return stable.toString();
+  return params.toString();
 }
 
 export function clearCandidateCache(): void {

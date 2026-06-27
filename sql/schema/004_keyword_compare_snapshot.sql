@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS keyword_compare_snapshot (
     four_months_ago_rank INTEGER,
     twelve_months_ago_rank INTEGER,
     monthly JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Statistical columns for 5-category reclassification
+    avg_search_volume NUMERIC,
+    stddev_search_volume NUMERIC,
+    cv_search_volume NUMERIC,
+    volume_slope NUMERIC,
+    volume_r2 NUMERIC,
+    gap_count INTEGER,
     refreshed_at TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (keyword_id, marketplace)
 );
