@@ -174,6 +174,8 @@ export interface KeywordCompareFilters {
   growth_rate_min: string;
   growth_rate_max: string;
   month_count_min: string;
+  ppc_max: string;
+  spr_max: string;
   sort_by: string;
   sort_order: "asc" | "desc";
 }

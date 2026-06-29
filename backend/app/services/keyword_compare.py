@@ -41,6 +41,8 @@ class KeywordCompareFilters:
     growth_rate_min: float | None = None
     growth_rate_max: float | None = None
     month_count_min: int | None = None
+    ppc_max: float | None = None
+    spr_max: int | None = None
     sort_by: str = "growth_rate"
     sort_order: str = "desc"
 
@@ -105,6 +107,14 @@ def _build_where(filters: KeywordCompareFilters) -> tuple[str, dict[str, Any]]:
     if filters.month_count_min is not None:
         where.append("s.month_count >= %(month_count_min)s")
         params["month_count_min"] = filters.month_count_min
+
+    if filters.ppc_max is not None:
+        where.append("s.ppc_bid_mid <= %(ppc_max)s")
+        params["ppc_max"] = filters.ppc_max
+
+    if filters.spr_max is not None:
+        where.append("s.spr <= %(spr_max)s")
+        params["spr_max"] = filters.spr_max
 
     return " AND ".join(where), params
 

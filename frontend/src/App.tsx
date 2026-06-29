@@ -114,6 +114,8 @@ const DEFAULT_COMPARE_FILTERS: KeywordCompareFilters = {
   growth_rate_min: "",
   growth_rate_max: "",
   month_count_min: "3",
+  ppc_max: "",
+  spr_max: "",
   sort_by: "end_search_volume",
   sort_order: "desc",
 };
@@ -539,6 +541,8 @@ export function App() {
     compareFilters.growth_rate_min,
     compareFilters.growth_rate_max,
     compareFilters.month_count_min,
+    compareFilters.ppc_max,
+    compareFilters.spr_max,
     compareFilters.sort_by,
     compareFilters.sort_order,
   ]);
@@ -1303,6 +1307,18 @@ export function App() {
                     onChange={(event) => updateCompareFilter("month_count_min", event.target.value)}
                   />
                 </Field>
+                <Field label="PPC上限">
+                  <input
+                    value={compareFilters.ppc_max}
+                    onChange={(event) => updateCompareFilter("ppc_max", event.target.value)}
+                  />
+                </Field>
+                <Field label="SPR上限">
+                  <input
+                    value={compareFilters.spr_max}
+                    onChange={(event) => updateCompareFilter("spr_max", event.target.value)}
+                  />
+                </Field>
                 <Field label="排序">
                   <AppleSelect
                     value={compareFilters.sort_by}
@@ -1363,6 +1379,8 @@ export function App() {
                       <th>关键词</th>
                       <th>类目</th>
                       <th className="sparkline-th">趋势图</th>
+                      <th>PPC</th>
+                      <th>SPR</th>
                       <th>增长率</th>
                       <th>排名变化</th>
                       <th>出现月数</th>
@@ -1379,14 +1397,14 @@ export function App() {
                     {compareLoading ? (
                       Array.from({ length: 8 }).map((_, index) => (
                         <tr key={index}>
-                          <td colSpan={11 + compareMonths.length}>
+                          <td colSpan={13 + compareMonths.length}>
                             <div className="skeleton" />
                           </td>
                         </tr>
                       ))
                     ) : compareItems.length === 0 ? (
                       <tr>
-                        <td colSpan={11 + compareMonths.length} className="empty-cell">
+                        <td colSpan={13 + compareMonths.length} className="empty-cell">
                           没有符合条件的横向对比关键词
                         </td>
                       </tr>
@@ -1406,6 +1424,8 @@ export function App() {
                             <td className="sparkline-cell">
                               <Sparkline volumes={volumes} width={120} height={32} />
                             </td>
+                            <td>{item.ppc_bid_mid ?? "-"}</td>
+                            <td>{item.spr ?? "-"}</td>
                             <td>
                               <strong className={(item.search_volume_growth_rate ?? 0) >= 0 ? "positive" : "negative"}>
                                 {formatGrowthPercent(item.search_volume_growth_rate)}

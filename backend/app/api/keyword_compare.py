@@ -27,6 +27,8 @@ def keyword_comparisons(
     growth_rate_min: float | None = Query(default=None),
     growth_rate_max: float | None = Query(default=None),
     month_count_min: int | None = Query(default=None, ge=1),
+    ppc_max: float | None = Query(default=None),
+    spr_max: int | None = Query(default=None),
     sort_by: str = Query(default="growth_rate"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     current_user: dict = Depends(get_current_user),
@@ -46,6 +48,8 @@ def keyword_comparisons(
         growth_rate_min=growth_rate_min,
         growth_rate_max=growth_rate_max,
         month_count_min=month_count_min,
+        ppc_max=ppc_max,
+        spr_max=spr_max,
         sort_by=sort_by,
         sort_order=sort_order,
     )
