@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 — 管理系统</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+  <div class="login-shell">
+    <form class="login-panel" method="post">
+      <h1>⚡ 管理系统</h1>
+      <p>Keyword Trends Admin Panel</p>
+      {% if error %}
+      <div class="flash flash-error">{{ error }}</div>
+      {% endif %}
+      <label>
+        <span>账号</span>
+        <input name="account" value="{{ account or '' }}" required autofocus>
+      </label>
+      <label>
+        <span>密码</span>
+        <input name="password" type="password" required>
+      </label>
+      <button type="submit" class="btn btn-primary">登录</button>
+    </form>
+  </div>
+</body>
+</html>

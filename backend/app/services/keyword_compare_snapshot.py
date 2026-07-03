@@ -74,15 +74,23 @@ def refresh_compare_snapshot(
             params,
         )
         span = cur.fetchone()  # (total_months, range_start, range_end)
-        total_months = span[0]
-        range_start = span[1]
-        range_end = span[2]
+        total_months = span["total_months"] if isinstance(span, dict) else span[0]
+        range_start = span["range_start"] if isinstance(span, dict) else span[1]
+        range_end = span["range_end"] if isinstance(span, dict) else span[2]
 
         # ── Step 3: INSERT base rows ────────────────────────────────────
         cur.execute(
             "DELETE FROM keyword_compare_snapshot WHERE marketplace = %(marketplace)s",
             params,
         )
+        cur.execute("SELECT to_regclass('public.keyword_compare_range_cache') AS cache_table")
+        cache_row = cur.fetchone()
+        cache_table = cache_row["cache_table"] if isinstance(cache_row, dict) else cache_row[0]
+        if cache_table:
+            cur.execute(
+                "DELETE FROM keyword_compare_range_cache WHERE marketplace = %(marketplace)s",
+                params,
+            )
         cur.execute(
             """
             INSERT INTO keyword_compare_snapshot (
@@ -143,6 +151,46 @@ def refresh_compare_snapshot(
             params,
         )
 
+        # ── Step 5.5: prev-month and YoY search volumes for 环比/同比 ──
+        cur.execute(
+            """
+            UPDATE keyword_compare_snapshot s
+            SET
+                prev_month_search_volume = pm.prev_month_search_volume,
+                yoy_search_volume = ym.yoy_search_volume
+            FROM (
+                SELECT
+                    s2.keyword_id,
+                    s2.marketplace,
+                    m.search_volume AS prev_month_search_volume
+                FROM keyword_compare_snapshot s2
+                LEFT JOIN keyword_monthly_metrics m
+                  ON m.keyword_id = s2.keyword_id
+                 AND m.marketplace = s2.marketplace
+                 AND m.data_month = (s2.last_month - INTERVAL '1 month')::date
+                WHERE s2.marketplace = %(marketplace)s
+            ) pm
+            LEFT JOIN (
+                SELECT
+                    s3.keyword_id,
+                    s3.marketplace,
+                    m.search_volume AS yoy_search_volume
+                FROM keyword_compare_snapshot s3
+                LEFT JOIN keyword_monthly_metrics m
+                  ON m.keyword_id = s3.keyword_id
+                 AND m.marketplace = s3.marketplace
+                 AND m.data_month = (s3.last_month - INTERVAL '12 months')::date
+                WHERE s3.marketplace = %(marketplace)s
+            ) ym
+              ON ym.keyword_id = pm.keyword_id
+             AND ym.marketplace = pm.marketplace
+            WHERE s.keyword_id = pm.keyword_id
+              AND s.marketplace = pm.marketplace
+              AND s.marketplace = %(marketplace)s
+            """,
+            params,
+        )
+
         # ── Step 6: derived columns ─────────────────────────────────────
         cur.execute(
             """
@@ -165,6 +213,22 @@ def refresh_compare_snapshot(
                     WHEN start_rank IS NULL OR end_rank IS NULL
                     THEN NULL
                     ELSE start_rank - end_rank
+                END,
+                mom_change = CASE
+                    WHEN prev_month_search_volume IS NOT NULL AND prev_month_search_volume > 0
+                    THEN end_search_volume - prev_month_search_volume
+                END,
+                mom_rate = CASE
+                    WHEN prev_month_search_volume IS NOT NULL AND prev_month_search_volume > 0
+                    THEN ROUND(((end_search_volume - prev_month_search_volume) / prev_month_search_volume::numeric) * 100, 2)
+                END,
+                yoy_change = CASE
+                    WHEN yoy_search_volume IS NOT NULL AND yoy_search_volume > 0
+                    THEN end_search_volume - yoy_search_volume
+                END,
+                yoy_rate = CASE
+                    WHEN yoy_search_volume IS NOT NULL AND yoy_search_volume > 0
+                    THEN ROUND(((end_search_volume - yoy_search_volume) / yoy_search_volume::numeric) * 100, 2)
                 END
             WHERE marketplace = %(marketplace)s
             """,

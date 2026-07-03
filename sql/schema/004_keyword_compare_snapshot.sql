@@ -54,5 +54,3 @@ CREATE INDEX IF NOT EXISTS idx_compare_snapshot_growth
 CREATE INDEX IF NOT EXISTS idx_compare_snapshot_category
     ON keyword_compare_snapshot (marketplace, category);
 
-CREATE INDEX IF NOT EXISTS idx_compare_snapshot_keyword_trgm
-    ON keyword_compare_snapshot USING GIN (keyword gin_trgm_ops);

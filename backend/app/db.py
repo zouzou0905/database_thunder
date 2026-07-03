@@ -17,4 +17,5 @@ def get_connection() -> Iterator[psycopg.Connection]:
     with pool.connection() as conn:
         conn.row_factory = dict_row
         conn.execute("SET statement_timeout = '30s'")  # prevent runaway queries from blocking the pool
+        conn.execute("SET lock_timeout = '5s'")       # don't hang if a background refresh holds a lock
         yield conn

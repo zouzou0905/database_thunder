@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}编辑用户{% endblock %}
+{% block content %}
+<h2>编辑用户：{{ user.account }}</h2>
+
+<form id="edit-form" class="form-panel">
+  <label>
+    <span>显示名</span>
+    <input name="display_name" value="{{ user.display_name }}" required>
+  </label>
+  <label>
+    <span>角色</span>
+    <select name="role">
+      {% for r in roles %}
+      <option value="{{ r }}" {% if r == user.role %}selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>状态</span>
+    <select name="is_active">
+      <option value="true" {% if user.is_active %}selected{% endif %}>启用</option>
+      <option value="false" {% if not user.is_active %}selected{% endif %}>停用</option>
+    </select>
+  </label>
+  <label>
+    <span>新密码 <small>(留空不修改)</small></span>
+    <input name="new_password" type="password" minlength="6" placeholder="输入新密码">
+  </label>
+  <div id="form-error" class="flash flash-error" style="display:none"></div>
+  <div class="form-actions">
+    <a href="/admin/users" class="btn btn-secondary">返回</a>
+    <button type="submit" class="btn btn-primary">保存</button>
+  </div>
+</form>
+
+<script>
+document.getElementById('edit-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const data = {
+    display_name: form.display_name.value,
+    role: form.role.value,
+    is_active: form.is_active.value,
+    new_password: form.new_password.value,
+  };
+  try {
+    const resp = await fetch('/admin/users/{{ user.id }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (resp.redirected) {
+      window.location.href = resp.url;
+    } else if (!resp.ok) {
+      const err = await resp.json();
+      document.getElementById('form-error').textContent = err.detail || '保存失败';
+      document.getElementById('form-error').style.display = 'block';
+    }
+  } catch (err) {
+    document.getElementById('form-error').textContent = '网络错误';
+    document.getElementById('form-error').style.display = 'block';
+  }
+});
+</script>
+{% endblock %}

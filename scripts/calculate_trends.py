@@ -356,6 +356,48 @@ def main() -> None:
             conn.commit()
             print(f"  Refreshed {args.marketplace} compare snapshot: {row_count} rows.", flush=True)
 
+        # Step 4 — pre-warm keyword_compare_range_cache for common date ranges
+        # so the first user query for any of these ranges is instant instead
+        # of waiting for expensive live CTE aggregation.
+        if not args.skip_cache_refresh:
+            print("Pre-warming compare range cache for common intervals ...", flush=True)
+            from datetime import date as dt_date
+            from app.services.keyword_compare import (
+                KeywordCompareFilters,
+                _ensure_range_cache,
+                _month_to_date,
+            )
+            # Build list of warm-up ranges from available months
+            warmup_ranges: list[tuple[str, str, str]] = []  # (label, start, end)
+            sorted_months = sorted(months)
+            if len(sorted_months) >= 1:
+                # Each individual month
+                for m in sorted_months:
+                    s = m.strftime("%Y-%m")
+                    warmup_ranges.append((f"单月 {s}", s, s))
+            if len(sorted_months) >= 3:
+                # Last 3 months
+                s = sorted_months[-3].strftime("%Y-%m")
+                e = sorted_months[-1].strftime("%Y-%m")
+                warmup_ranges.append((f"近3月 {s}~{e}", s, e))
+            if len(sorted_months) >= 6:
+                # Last 6 months
+                s = sorted_months[-6].strftime("%Y-%m")
+                e = sorted_months[-1].strftime("%Y-%m")
+                warmup_ranges.append((f"近6月 {s}~{e}", s, e))
+            for label, start, end in warmup_ranges:
+                print(f"  Warming {label} ...", end=" ", flush=True)
+                filters = KeywordCompareFilters(
+                    start_month=start, end_month=end, marketplace=args.marketplace,
+                )
+                _ensure_range_cache(
+                    conn, filters,
+                    _month_to_date(start), _month_to_date(end),
+                )
+                conn.commit()
+                print("done.", flush=True)
+            print("Range cache pre-warm complete.", flush=True)
+
 
 if __name__ == "__main__":
     main()

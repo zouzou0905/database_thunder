@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}错误详情{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h2>错误详情 #{{ error.id }}</h2>
+  <div>
+    <form method="post" action="/admin/error-logs/{{ error.id }}/resolve" style="display:inline">
+      <button type="submit" class="btn btn-sm">{{ '标记未处理' if error.resolved else '标记已处理' }}</button>
+    </form>
+    <a href="/admin/error-logs" class="btn btn-sm btn-secondary">返回列表</a>
+  </div>
+</div>
+
+<div class="detail-grid">
+  <div class="detail-item">
+    <span>级别</span>
+    <strong><span class="badge badge-error">{{ error.level }}</span></strong>
+  </div>
+  <div class="detail-item">
+    <span>状态码</span>
+    <strong>{{ error.status_code or '-' }}</strong>
+  </div>
+  <div class="detail-item">
+    <span>方法</span>
+    <strong>{{ error.method or '-' }}</strong>
+  </div>
+  <div class="detail-item">
+    <span>端点</span>
+    <strong><code>{{ error.endpoint or '-' }}</code></strong>
+  </div>
+  <div class="detail-item">
+    <span>时间</span>
+    <strong>{{ error.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong>
+  </div>
+  <div class="detail-item">
+    <span>用户</span>
+    <strong>{{ error.user_account or '-' }}</strong>
+  </div>
+  <div class="detail-item">
+    <span>客户端 IP</span>
+    <strong>{{ error.client_ip or '-' }}</strong>
+  </div>
+  <div class="detail-item">
+    <span>User Agent</span>
+    <strong class="truncate">{{ error.user_agent or '-' }}</strong>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>错误消息</h3>
+  <pre class="error-msg">{{ error.message }}</pre>
+</div>
+
+{% if error.traceback %}
+<div class="panel">
+  <h3>Traceback</h3>
+  <pre class="traceback">{{ error.traceback }}</pre>
+</div>
+{% endif %}
+
+{% if error.request_body %}
+<div class="panel">
+  <h3>请求体</h3>
+  <pre class="request-body">{{ error.request_body }}</pre>
+</div>
+{% endif %}
+{% endblock %}

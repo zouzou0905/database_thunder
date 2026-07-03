@@ -53,3 +53,27 @@ CREATE TABLE IF NOT EXISTS keyword_selection_notes (
 
 CREATE INDEX IF NOT EXISTS idx_keyword_selection_notes_keyword
     ON keyword_selection_notes (keyword_id, analysis_month, marketplace, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS shared_clipboard_items (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    content_size INTEGER NOT NULL,
+    created_by BIGINT NOT NULL REFERENCES app_users(id),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shared_clipboard_items_recent
+    ON shared_clipboard_items (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_shared_clipboard_items_user
+    ON shared_clipboard_items (created_by, created_at DESC);
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'keyword_user') THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON shared_clipboard_items TO keyword_user;
+        GRANT USAGE, SELECT ON SEQUENCE shared_clipboard_items_id_seq TO keyword_user;
+    END IF;
+END $$;

@@ -48,7 +48,7 @@ export interface Pagination {
   total: number;
   total_pages: number;
   total_is_estimated?: boolean;
-  total_label?: "estimated" | "lower_bound";
+  total_label?: "estimated" | "lower_bound" | "exact";
   has_more?: boolean;
 }
 
@@ -115,7 +115,9 @@ export interface CandidateFilters {
   search_volume_max: string;
   score_min: string;
   score_max: string;
+  ppc_min: string;
   ppc_max: string;
+  spr_min: string;
   spr_max: string;
   sort_by: string;
   sort_order: "asc" | "desc";
@@ -146,6 +148,7 @@ export interface KeywordCompareItem {
   rank_change: number | null;
   month_count: number;
   total_months: number;
+  avg_search_volume: number | null;
   ppc_bid_mid: number | null;
   spr: number | null;
   prev_month_rank: number | null;
@@ -158,6 +161,12 @@ export interface KeywordCompareItem {
   user_is_favorite: boolean;
   user_notes: string | null;
   monthly: KeywordCompareMonthlyItem[];
+  holiday_tags: HolidayTag[] | null;
+  holiday_label: string | null;
+  mom_change: number | null;
+  mom_rate: number | null;
+  yoy_change: number | null;
+  yoy_rate: number | null;
 }
 
 export interface KeywordCompareFilters {
@@ -174,7 +183,10 @@ export interface KeywordCompareFilters {
   growth_rate_min: string;
   growth_rate_max: string;
   month_count_min: string;
+  month_count_max: string;
+  ppc_min: string;
   ppc_max: string;
+  spr_min: string;
   spr_max: string;
   sort_by: string;
   sort_order: "asc" | "desc";
@@ -193,6 +205,61 @@ export interface ExclusionRule {
   exclusion_type: string;
   reason: string | null;
   is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClipboardItem {
+  id: number;
+  title: string;
+  content: string;
+  content_size: number;
+  created_by: number;
+  created_by_name: string;
+  created_by_account: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HolidayTag {
+  code: string;
+  name_cn: string;
+  confidence: "confirmed" | "suspected";
+  matched_terms: string[];
+  match_sources: string[];
+  trend_year: number;
+  trend_start_month: number;
+  trend_end_month: number;
+  start_volume: number | null;
+  end_volume: number | null;
+  growth_rate: number | null;
+  is_trend_confirmed: boolean;
+}
+
+export interface HolidayTerm {
+  id: number;
+  event_id: number;
+  term: string;
+  term_normalized: string;
+  match_type: "word" | "phrase";
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HolidayEvent {
+  id: number;
+  code: string;
+  name_cn: string;
+  name_en: string;
+  marketplace: string;
+  trend_start_month: number;
+  trend_end_month: number;
+  min_growth_rate: number;
+  is_active: boolean;
+  active_term_count: number;
+  term_count: number;
+  terms: HolidayTerm[];
   created_at: string;
   updated_at: string;
 }

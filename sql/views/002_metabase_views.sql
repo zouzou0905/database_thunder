@@ -27,6 +27,12 @@ SELECT
         WHEN 'volatile' THEN '波动'
         WHEN 'disappeared' THEN '消失'
         WHEN 'seasonal_candidate' THEN '疑似季节词'
+        WHEN 'volume_up_rank_down' THEN '需求升但排名降'
+        WHEN 'rank_up_volume_down' THEN '排名升但需求降'
+        WHEN 'volume_up' THEN '需求上升'
+        WHEN 'volume_down' THEN '需求下降'
+        WHEN 'rank_up' THEN '排名上升'
+        WHEN 'rank_down' THEN '排名下降'
         ELSE o.trend_label
     END AS trend_label_cn,
     o.keyword_level,

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}仪表盘{% endblock %}
+{% block content %}
+<h2>仪表盘</h2>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <strong>{{ total_users }}</strong>
+    <span>总用户</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ active_users }}</strong>
+    <span>活跃用户</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ admin_count }}</strong>
+    <span>管理员</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ unresolved_errors }}</strong>
+    <span>未处理错误</span>
+  </div>
+</div>
+
+<div class="panel-grid">
+  <section class="panel">
+    <h3>最近用户</h3>
+    {% if recent_users %}
+    <table>
+      <thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th></tr></thead>
+      <tbody>
+      {% for u in recent_users %}
+      <tr>
+        <td>{{ u.account }}</td>
+        <td>{{ u.display_name }}</td>
+        <td><span class="badge badge-{{ u.role }}">{{ u.role }}</span></td>
+        <td><span class="badge {% if u.is_active %}badge-active{% else %}badge-inactive{% endif %}">{{ '启用' if u.is_active else '停用' }}</span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">暂无用户</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h3>最近错误</h3>
+    {% if recent_errors %}
+    <table>
+      <thead><tr><th>级别</th><th>端点</th><th>消息</th><th>时间</th></tr></thead>
+      <tbody>
+      {% for e in recent_errors %}
+      <tr>
+        <td><span class="badge badge-error">{{ e.level }}</span></td>
+        <td>{{ e.endpoint or '-' }}</td>
+        <td class="truncate">{{ e.message[:80] }}</td>
+        <td>{{ e.created_at.strftime('%m-%d %H:%M') }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">暂无错误 🎉</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

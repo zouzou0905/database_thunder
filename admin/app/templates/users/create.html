@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}创建用户{% endblock %}
+{% block content %}
+<h2>创建用户</h2>
+
+<form id="create-form" class="form-panel">
+  <label>
+    <span>账号 <small>(必填，2-50 字符)</small></span>
+    <input name="account" required minlength="2" maxlength="50" autofocus>
+  </label>
+  <label>
+    <span>显示名 <small>(必填)</small></span>
+    <input name="display_name" required minlength="1" maxlength="100">
+  </label>
+  <label>
+    <span>密码 <small>(必填，至少 6 字符)</small></span>
+    <input name="password" type="password" required minlength="6">
+  </label>
+  <label>
+    <span>角色</span>
+    <select name="role">
+      {% for r in roles %}
+      <option value="{{ r }}" {% if r == 'operator' %}selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div id="form-error" class="flash flash-error" style="display:none"></div>
+  <div class="form-actions">
+    <a href="/admin/users" class="btn btn-secondary">取消</a>
+    <button type="submit" class="btn btn-primary">创建</button>
+  </div>
+</form>
+
+<script>
+document.getElementById('create-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const data = {
+    account: form.account.value,
+    display_name: form.display_name.value,
+    password: form.password.value,
+    role: form.role.value,
+  };
+  try {
+    const resp = await fetch('/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (resp.redirected) {
+      window.location.href = resp.url;
+    } else if (!resp.ok) {
+      const err = await resp.json();
+      document.getElementById('form-error').textContent = err.detail || '创建失败';
+      document.getElementById('form-error').style.display = 'block';
+    }
+  } catch (err) {
+    document.getElementById('form-error').textContent = '网络错误';
+    document.getElementById('form-error').style.display = 'block';
+  }
+});
+</script>
+{% endblock %}
