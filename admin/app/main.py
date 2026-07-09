@@ -17,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from admin.app.core.auth import AuthRequired
 from admin.app.core.config import get_admin_settings
 from admin.app.pool import close_pool
-from admin.app.routes import auth, dashboard, error_logs, users
+from admin.app.routes import auth, dashboard, database_tables, error_logs, users
 
 settings = get_admin_settings()
 
@@ -42,6 +42,7 @@ def create_admin_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(dashboard.router)
     app.include_router(users.router)
+    app.include_router(database_tables.router)
     app.include_router(error_logs.router)
 
     @app.exception_handler(AuthRequired)

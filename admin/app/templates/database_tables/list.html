@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}数据库表{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h2>数据库表</h2>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <strong>{{ table_count }}</strong>
+    <span>表数量</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ "{:,}".format(total_rows) }}</strong>
+    <span>估算总行数</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ total_table_size }}</strong>
+    <span>表数据大小</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ total_index_size }}</strong>
+    <span>索引大小</span>
+  </div>
+  <div class="stat-card">
+    <strong>{{ total_size }}</strong>
+    <span>总占用</span>
+  </div>
+</div>
+
+<section class="apple-panel">
+  <div class="table-shell">
+    <table class="db-table-list">
+      <thead>
+        <tr>
+          <th>Schema</th>
+          <th>表名</th>
+          <th>类型</th>
+          <th class="num">估算行数</th>
+          <th class="num">Dead Rows</th>
+          <th class="num">表大小</th>
+          <th class="num">索引大小</th>
+          <th class="num">总大小</th>
+          <th>最后 Analyze</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for table in tables %}
+        <tr>
+          <td>{{ table.schema_name }}</td>
+          <td class="mono strong">{{ table.table_name }}</td>
+          <td><span class="badge badge-viewer">{{ table.table_type }}</span></td>
+          <td class="num">{{ "{:,}".format(table.approx_rows) }}</td>
+          <td class="num">{{ "{:,}".format(table.dead_rows) }}</td>
+          <td class="num">{{ table.table_size }}</td>
+          <td class="num">{{ table.index_size }}</td>
+          <td class="num strong">{{ table.total_size }}</td>
+          <td>
+            {% if table.last_analyze %}
+              {{ table.last_analyze.strftime('%Y-%m-%d %H:%M') }}
+            {% elif table.last_autoanalyze %}
+              {{ table.last_autoanalyze.strftime('%Y-%m-%d %H:%M') }}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td class="empty" colspan="9">暂无表数据</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
