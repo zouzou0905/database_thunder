@@ -13,6 +13,7 @@ from admin.app.core.config import get_admin_settings
 from admin.app.db import get_connection
 from backend.app.services.users import (
     create_user,
+    delete_user,
     get_user_by_id,
     list_users,
     update_user,
@@ -119,4 +120,29 @@ def toggle_active(
     if not user:
         raise HTTPException(status_code=404)
     update_user(conn, user_id, is_active=not user["is_active"])
+    return RedirectResponse(url="/admin/users", status_code=303)
+
+
+@router.post("/{user_id}/delete")
+def delete(
+    user_id: int,
+    request: Request,
+    admin=Depends(get_current_admin),
+    conn: Connection = Depends(get_connection),
+):
+    if user_id == admin["id"]:
+        users = list_users(conn)
+        return templates.TemplateResponse(
+            request,
+            "users/list.html",
+            {
+                "admin": admin,
+                "users": users,
+                "error": "不能删除当前登录的管理员账号，请先使用其他管理员账号操作。",
+            },
+            status_code=400,
+        )
+    deleted = delete_user(conn, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404)
     return RedirectResponse(url="/admin/users", status_code=303)

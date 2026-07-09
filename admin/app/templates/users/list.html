@@ -32,6 +32,13 @@
       <form method="post" action="/admin/users/{{ u.id }}/toggle" style="display:inline">
         <button type="submit" class="btn btn-sm btn-secondary">{{ '停用' if u.is_active else '启用' }}</button>
       </form>
+      <form method="post" action="/admin/users/{{ u.id }}/delete" style="display:inline">
+        <button
+          type="submit"
+          class="btn btn-sm btn-danger"
+          data-confirm="确认删除用户 {{ u.account }}？该用户的收藏、状态、备注和共享粘贴板内容会被一并删除。"
+        >删除</button>
+      </form>
     </td>
   </tr>
   {% endfor %}

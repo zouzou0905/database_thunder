@@ -135,3 +135,19 @@ def update_user(
         user = cur.fetchone()
     conn.commit()
     return user
+
+
+def delete_user(conn: psycopg.Connection, user_id: int) -> bool:
+    """Delete an application user and user-owned operational records."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM app_users WHERE id = %s", [user_id])
+        if not cur.fetchone():
+            return False
+
+        cur.execute("DELETE FROM keyword_selection_states WHERE owner_user_id = %s", [user_id])
+        cur.execute("DELETE FROM keyword_selection_notes WHERE user_id = %s", [user_id])
+        cur.execute("DELETE FROM shared_clipboard_items WHERE created_by = %s", [user_id])
+        cur.execute("UPDATE login_history SET user_id = NULL WHERE user_id = %s", [user_id])
+        cur.execute("DELETE FROM app_users WHERE id = %s", [user_id])
+    conn.commit()
+    return True

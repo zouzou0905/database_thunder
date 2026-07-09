@@ -257,6 +257,8 @@ td.truncate { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { color: var(--foreground); background: #ffffff; border: 1px solid var(--border); }
 .btn-secondary:hover { background: #f5f5f7; }
+.btn-danger { color: #ffffff; background: var(--danger); }
+.btn-danger:hover { background: #b80012; }
 .btn-sm { min-height: 32px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
 
 /* ── Forms ──────────────────────────────────── */
