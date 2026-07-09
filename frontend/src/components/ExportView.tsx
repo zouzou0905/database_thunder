@@ -1,15 +1,16 @@
 import { Download, Search, X } from "lucide-react";
-import type { CategoryItem, MonthItem } from "../types";
+import type { CategoryItem, HolidayEvent, MonthItem } from "../types";
 import { formatNumber } from "../utils";
 import { AppleSelect } from "./AppleSelect";
 import type { SelectOption } from "./AppleSelect";
 import { Field } from "./Field";
 import { Metric } from "./Metric";
 
-export const EXPORT_SINGLE_FILE_LIMIT = 20000;
-const DEFAULT_EXPORT_MAX_ROWS = EXPORT_SINGLE_FILE_LIMIT;
+export const EXPORT_BATCH_SIZE = 20000;
+const DEFAULT_EXPORT_MAX_ROWS = 20000;
 
 export interface ExportFilters {
+  offset?: number;
   analysis_month: string;
   marketplace: string;
   keyword: string;
@@ -29,6 +30,7 @@ export interface ExportFilters {
   start_month: string;
   end_month: string;
   trend_type: string;
+  holiday_code: string;
   growth_rate_min: string;
   growth_rate_max: string;
   month_count_min: string;
@@ -43,6 +45,7 @@ interface ExportViewProps {
   setExportFilters: React.Dispatch<React.SetStateAction<ExportFilters>>;
   months: MonthItem[];
   categories: CategoryItem[];
+  holidayEvents: HolidayEvent[];
   trendOptions: SelectOption[];
   candidateLevelOptions: SelectOption[];
   compareTrendOptions: SelectOption[];
@@ -57,12 +60,13 @@ interface ExportViewProps {
   setExportFilename: (value: string) => void;
   exportFormat: "xlsx" | "csv";
   setExportFormat: (value: "xlsx" | "csv") => void;
-  exportMaxRows: number;
-  setExportMaxRows: (value: number) => void;
+  exportMaxRows: string;
+  setExportMaxRows: (value: string) => void;
   effectiveExportMaxRows: number;
   exportRowsThisRun: number;
   exportWouldTruncate: boolean;
-  exportExceedsSingleFileLimit: boolean;
+  exportBatchCount: number;
+  exportBatchSize: number;
   onPreviewCount: () => Promise<void>;
   onDownload: () => Promise<void>;
   onClearPreview: () => void;
@@ -75,6 +79,7 @@ export function ExportView({
   setExportFilters,
   months,
   categories,
+  holidayEvents,
   trendOptions,
   candidateLevelOptions,
   compareTrendOptions,
@@ -93,12 +98,24 @@ export function ExportView({
   effectiveExportMaxRows,
   exportRowsThisRun,
   exportWouldTruncate,
-  exportExceedsSingleFileLimit,
+  exportBatchCount,
+  exportBatchSize,
   onPreviewCount,
   onDownload,
   onClearPreview,
 }: ExportViewProps) {
   const resetCount = () => {}; // count is reset via onClearPreview
+  const holidayOptions: SelectOption[] = [
+    { value: "", label: "全部节日" },
+    { value: "__any__", label: "任一节日标签" },
+    ...holidayEvents
+      .filter((event) => event.is_active && (!exportFilters.marketplace || event.marketplace === exportFilters.marketplace))
+      .sort((a, b) => a.trend_start_month - b.trend_start_month || a.name_cn.localeCompare(b.name_cn))
+      .map((event) => ({
+        value: event.code,
+        label: `${event.name_cn || event.name_en || event.code} (${event.trend_start_month}-${event.trend_end_month}月)`,
+      })),
+  ];
 
   return (
     <section className="admin-grid">
@@ -232,6 +249,17 @@ export function ExportView({
                   ariaLabel="对比类型"
                   onChange={(value) => {
                     setExportFilters((prev) => ({ ...prev, trend_type: value }));
+                    onClearPreview();
+                  }}
+                />
+              </Field>
+              <Field label="节日标签">
+                <AppleSelect
+                  value={exportFilters.holiday_code}
+                  options={holidayOptions}
+                  ariaLabel="节日标签"
+                  onChange={(value) => {
+                    setExportFilters((prev) => ({ ...prev, holiday_code: value }));
                     onClearPreview();
                   }}
                 />
@@ -421,6 +449,65 @@ export function ExportView({
         {exportError && <div className="alert">{exportError}</div>}
       </section>
 
+      <section className="export-options-panel apple-panel">
+        <div className="filter-title">
+          <Download size={16} />
+          导出选项
+        </div>
+        <div className="export-options-grid">
+          <Field label="文件名称">
+            <input
+              value={exportFilename}
+              onChange={(e) => setExportFilename(e.target.value)}
+              placeholder="输入文件名"
+            />
+          </Field>
+          <Field label="文件格式">
+            <AppleSelect
+              value={exportFormat}
+              options={[
+                { value: "xlsx", label: "Excel (.xlsx)" },
+                { value: "csv", label: "CSV (.csv)" },
+              ]}
+              ariaLabel="文件格式"
+              onChange={(value) => setExportFormat(value as "xlsx" | "csv")}
+            />
+          </Field>
+          <Field label="导出条数">
+            <div className="export-row-limit">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={exportMaxRows}
+                onChange={(e) => {
+                  setExportMaxRows(e.target.value.replace(/\D/g, ""));
+                }}
+                onBlur={() => {
+                  if (!exportMaxRows) {
+                    setExportMaxRows(String(DEFAULT_EXPORT_MAX_ROWS));
+                  }
+                }}
+              />
+              <div className="limit-presets" aria-label="导出条数快捷选择">
+                {[5000, 20000, 50000].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={
+                      Number(exportMaxRows) === value ? "limit-preset active" : "limit-preset"
+                    }
+                    onClick={() => setExportMaxRows(String(value))}
+                  >
+                    {formatNumber(value)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Field>
+        </div>
+      </section>
+
       {exportCount !== null && (
         <section className="export-result apple-panel">
           <div className="filter-title">
@@ -429,7 +516,7 @@ export function ExportView({
           </div>
           <div className="metric-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
             <Metric
-              label="预计导出条数"
+              label="总条数"
               value={`${exportCountEstimated ? "约 " : ""}${formatNumber(exportCount)}`}
               compact
             />
@@ -438,64 +525,21 @@ export function ExportView({
               value={exportSource === "candidates" ? "选品机会池" : "关键词横向对比"}
               compact
             />
-            <Metric label="系统单次上限" value={formatNumber(EXPORT_SINGLE_FILE_LIMIT)} compact />
-            <Metric label="本次将导出" value={formatNumber(exportRowsThisRun)} compact />
+            <Metric label="预计导出条数" value={formatNumber(exportRowsThisRun)} compact />
+            {exportBatchCount > 1 && (
+              <Metric label="自动分批" value={`${exportBatchCount} 个文件，每批 ${formatNumber(exportBatchSize)} 条`} compact />
+            )}
           </div>
-          <div className="export-options">
-            <Field label="文件名称">
-              <input
-                value={exportFilename}
-                onChange={(e) => setExportFilename(e.target.value)}
-                placeholder="输入文件名"
-              />
-            </Field>
-            <Field label="文件格式">
-              <AppleSelect
-                value={exportFormat}
-                options={[
-                  { value: "xlsx", label: "Excel (.xlsx)" },
-                  { value: "csv", label: "CSV (.csv)" },
-                ]}
-                ariaLabel="文件格式"
-                onChange={(value) => setExportFormat(value as "xlsx" | "csv")}
-              />
-            </Field>
-            <Field label="最大导出条数">
-              <div className="export-row-limit">
-                <input
-                  type="number"
-                  min={1}
-                  max={EXPORT_SINGLE_FILE_LIMIT}
-                  value={exportMaxRows}
-                  onChange={(e) => {
-                    const next = Number(e.target.value) || DEFAULT_EXPORT_MAX_ROWS;
-                    setExportMaxRows(Math.min(Math.max(next, 1), EXPORT_SINGLE_FILE_LIMIT));
-                  }}
-                />
-                <div className="limit-presets" aria-label="导出条数快捷选择">
-                  {[5000, 10000, EXPORT_SINGLE_FILE_LIMIT].map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={
-                        effectiveExportMaxRows === value ? "limit-preset active" : "limit-preset"
-                      }
-                      onClick={() => setExportMaxRows(value)}
-                    >
-                      {formatNumber(value)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </Field>
-          </div>
-          {exportWouldTruncate && (
+          {exportWouldTruncate && !exportBatchCount && (
             <div className="alert warning">
-              预计有 {formatNumber(exportCount)} 条，本次将导出当前排序下的前{" "}
-              {formatNumber(exportRowsThisRun)} 条。
-              {exportExceedsSingleFileLimit
-                ? " 如需完整导出，请按月份、类目、选品分或搜索量区间缩小筛选条件后分批导出。"
-                : " 如需完整导出，可以调高最大导出条数，或缩小筛选条件分批导出。"}
+              总条数 {formatNumber(exportCount)} 条，本次将导出当前排序下的前{" "}
+              {formatNumber(exportRowsThisRun)} 条。可调高最大导出条数以导出更多。
+            </div>
+          )}
+          {exportBatchCount > 1 && (
+            <div className="alert" style={{ background: "var(--info-bg)", borderColor: "var(--info-border)" }}>
+              数据将自动拆分为 {exportBatchCount} 个文件，每文件最多 {formatNumber(exportBatchSize)} 条。
+              文件将按排序顺序依次下载，请允许浏览器多次下载。
             </div>
           )}
           {exportLoading && (

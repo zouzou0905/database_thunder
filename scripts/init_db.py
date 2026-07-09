@@ -19,6 +19,8 @@ SQL_FILES = [
     "sql/schema/009_login_history.sql",
     "sql/schema/010_holiday_lexicon.sql",
     "sql/schema/011_keyword_holiday_tags.sql",
+    "sql/schema/012_keyword_compare_scenario_snapshot.sql",
+    "sql/schema/013_keyword_compare_interval_snapshot.sql",
     "sql/indexes/001_indexes.sql",
     "sql/indexes/002_trigram.sql",
     "sql/indexes/003_performance.sql",

@@ -163,9 +163,11 @@ def export_candidates_for_user(
     filters: CandidateFilters,
     user_id: int,
     max_rows: int = 5000,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     page_size = 500
-    page = 1
+    page = (offset // page_size) + 1
+    skip_in_page = offset % page_size
     rows: list[dict[str, Any]] = []
     while len(rows) < max_rows:
         page_filters = replace(filters, page=page, page_size=page_size)
@@ -173,6 +175,9 @@ def export_candidates_for_user(
         items = result["items"]
         if not items:
             break
+        if skip_in_page > 0:
+            items = items[skip_in_page:]
+            skip_in_page = 0
         rows.extend(items)
         if page >= result["pagination"]["total_pages"]:
             break

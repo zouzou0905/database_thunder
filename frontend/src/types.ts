@@ -178,6 +178,7 @@ export interface KeywordCompareFilters {
   keyword: string;
   category: string;
   trend_type: string;
+  holiday_code: string;
   search_volume_min: string;
   search_volume_max: string;
   growth_rate_min: string;

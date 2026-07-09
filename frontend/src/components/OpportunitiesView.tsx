@@ -7,7 +7,7 @@ import {
   Star,
   X,
 } from "lucide-react";
-import type { FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { Candidate, CandidateFilters, CategoryItem, MonthItem } from "../types";
 import { formatNumber, statusLabel } from "../utils";
 import { AppleSelect } from "./AppleSelect";
@@ -215,9 +215,22 @@ export function OpportunitiesView({
   onToggleFavorite,
   onAddExclusion,
 }: OpportunitiesViewProps) {
+  const [keywordDraft, setKeywordDraft] = useState(filters.keyword);
   const currentScope = scopeOptions.find((item) => item.value === dataScope) ?? scopeOptions[0];
   const totalPrefix =
     totalLabel === "lower_bound" ? "至少 " : totalIsEstimated ? "约 " : "";
+
+  useEffect(() => {
+    setKeywordDraft(filters.keyword);
+  }, [filters.keyword]);
+
+  useEffect(() => {
+    if (keywordDraft === filters.keyword) return;
+    const timeoutId = window.setTimeout(() => {
+      updateFilter("keyword", keywordDraft);
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [keywordDraft, filters.keyword, updateFilter]);
 
   function submitPageJump(event: FormEvent) {
     event.preventDefault();
@@ -286,12 +299,10 @@ export function OpportunitiesView({
             <div className="input-icon">
               <Search size={15} />
               <input
-                value={filters.keyword}
-                onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, keyword: event.target.value }))
-                }
+                value={keywordDraft}
+                onChange={(event) => setKeywordDraft(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") updateFilter("page", 1);
+                  if (event.key === "Enter") updateFilter("keyword", keywordDraft);
                 }}
                 placeholder="输入英文或中文"
               />

@@ -1,10 +1,9 @@
-import { Download, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addHolidayTerms,
   createClipboardItem,
   createHolidayEvent,
-  downloadCandidateExport,
   downloadExportFile,
   deleteClipboardItem,
   deleteHolidayTerm,
@@ -35,7 +34,7 @@ import { CompareView } from "./components/CompareView";
 import { DetailDrawer } from "./components/DetailDrawer";
 import { ExclusionsView } from "./components/ExclusionsView";
 import type { NewExclusion } from "./components/ExclusionsView";
-import { ExportView, EXPORT_SINGLE_FILE_LIMIT } from "./components/ExportView";
+import { ExportView, EXPORT_BATCH_SIZE } from "./components/ExportView";
 import type { ExportFilters } from "./components/ExportView";
 import { HolidayLexiconView } from "./components/HolidayLexiconView";
 import { LoginView } from "./components/LoginView";
@@ -67,7 +66,7 @@ type ListView = Exclude<ActiveView, "compare" | "exclusions" | "export" | "clipb
 type ListViewState = { filters: CandidateFilters; dataScope: DataScope };
 
 // ── Shared constants ─────────────────────────────────────────
-const DEFAULT_EXPORT_MAX_ROWS = EXPORT_SINGLE_FILE_LIMIT;
+const DEFAULT_EXPORT_MAX_ROWS = 20000;
 
 const DEFAULT_FILTERS: CandidateFilters = {
   page: 1,
@@ -110,6 +109,7 @@ const DEFAULT_COMPARE_FILTERS: KeywordCompareFilters = {
   keyword: "",
   category: "",
   trend_type: "",
+  holiday_code: "",
   search_volume_min: "1000",
   search_volume_max: "",
   growth_rate_min: "",
@@ -230,7 +230,7 @@ export function App() {
   const [exportSource, setExportSource] = useState<"candidates" | "compare">("candidates");
   const [exportFilename, setExportFilename] = useState("选品候选词");
   const [exportFormat, setExportFormat] = useState<"xlsx" | "csv">("xlsx");
-  const [exportMaxRows, setExportMaxRows] = useState(DEFAULT_EXPORT_MAX_ROWS);
+  const [exportMaxRows, setExportMaxRows] = useState(String(DEFAULT_EXPORT_MAX_ROWS));
   const [exportCount, setExportCount] = useState<number | null>(null);
   const [exportCountEstimated, setExportCountEstimated] = useState(false);
   const [exportCountLabel, setExportCountLabel] = useState<string>("exact");
@@ -241,7 +241,7 @@ export function App() {
     trend_label: "", candidate_level: "", is_candidate: "", favorite_only: "",
     search_volume_min: "", search_volume_max: "", score_min: "", score_max: "",
     ppc_min: "", ppc_max: "", spr_min: "", spr_max: "",
-    start_month: "", end_month: "", trend_type: "", growth_rate_min: "", growth_rate_max: "",
+    start_month: "", end_month: "", trend_type: "", holiday_code: "", growth_rate_min: "", growth_rate_max: "",
     month_count_min: "", month_count_max: "", sort_by: "product_selection_score",
   });
 
@@ -261,22 +261,29 @@ export function App() {
     opportunities: { filters: { ...DEFAULT_FILTERS }, dataScope: DEFAULT_SCOPE },
     favorites: { filters: { ...DEFAULT_FAVORITE_FILTERS }, dataScope: "all" },
   });
+  const candidateLoadSeq = useRef(0);
+  const compareLoadSeq = useRef(0);
 
   // ── Effects ──────────────────────────────────────────────
 
   useEffect(() => {
     if (!user) return;
+    const controller = new AbortController();
     getMe().catch(() => {
+      if (controller.signal.aborted) return;
       clearSession();
       setUser(null);
     });
+    return () => controller.abort();
   }, [user]);
 
   useEffect(() => {
     if (!user) return;
     const finishDbOperation = beginDbOperation("正在查询月份数据");
-    getMonths()
+    const controller = new AbortController();
+    getMonths(controller.signal)
       .then((data) => {
+        if (controller.signal.aborted) return;
         setMonths(data.items);
         if (!filters.analysis_month && data.items.length) {
           const first = data.items[0];
@@ -294,26 +301,37 @@ export function App() {
           }));
         }
       })
-      .catch((err: Error) => setError(err.message))
+      .catch((err: Error) => {
+        if (err.name !== "AbortError") setError(err.message);
+      })
       .finally(finishDbOperation);
+    return () => controller.abort();
   }, [user, filters.analysis_month]);
 
   useEffect(() => {
     if (!user || !filters.analysis_month) return;
     const finishDbOperation = beginDbOperation("正在查询类目数据");
-    getCategories(filters.analysis_month, filters.marketplace)
-      .then((data) => setCategories(data.items))
-      .catch((err: Error) => setError(err.message))
+    const controller = new AbortController();
+    getCategories(filters.analysis_month, filters.marketplace, controller.signal)
+      .then((data) => {
+        if (!controller.signal.aborted) setCategories(data.items);
+      })
+      .catch((err: Error) => {
+        if (err.name !== "AbortError") setError(err.message);
+      })
       .finally(finishDbOperation);
+    return () => controller.abort();
   }, [user, filters.analysis_month, filters.marketplace]);
 
   useEffect(() => {
     if (!user || !filters.analysis_month || (activeView !== "opportunities" && activeView !== "favorites")) return;
-    void loadCandidates();
+    const controller = new AbortController();
+    void loadCandidates(false, controller.signal);
+    return () => controller.abort();
   }, [
     user, activeView,
     filters.page, filters.page_size, filters.analysis_month, filters.marketplace,
-    filters.category, filters.trend_label, filters.candidate_level,
+    filters.keyword, filters.category, filters.trend_label, filters.candidate_level,
     filters.selection_segment, filters.is_candidate, filters.favorite_only,
     filters.search_volume_min, filters.search_volume_max,
     filters.score_min, filters.score_max,
@@ -332,18 +350,20 @@ export function App() {
   }, [user, activeView]);
 
   useEffect(() => {
-    if (!user || activeView !== "holidayLexicon") return;
+    if (!user || (activeView !== "holidayLexicon" && activeView !== "compare" && activeView !== "export")) return;
     void loadHolidayEvents();
   }, [user, activeView]);
 
   useEffect(() => {
     if (!user || activeView !== "compare" || !compareFilters.start_month || !compareFilters.end_month) return;
-    void loadKeywordCompare();
+    const controller = new AbortController();
+    void loadKeywordCompare(controller.signal);
+    return () => controller.abort();
   }, [
     user, activeView,
     compareFilters.page, compareFilters.page_size,
     compareFilters.start_month, compareFilters.end_month, compareFilters.marketplace,
-    compareFilters.category, compareFilters.trend_type, compareFilters.keyword,
+    compareFilters.category, compareFilters.trend_type, compareFilters.holiday_code, compareFilters.keyword,
     compareFilters.search_volume_min, compareFilters.search_volume_max,
     compareFilters.growth_rate_min, compareFilters.growth_rate_max,
     compareFilters.month_count_min, compareFilters.month_count_max,
@@ -394,10 +414,14 @@ export function App() {
     : activeView === "holidayLexicon" ? "维护万圣节、圣诞节等节日词库，并定义对应的趋势验证窗口。"
     : "在全量词库、候选词库和高优先级机会之间切换，明确区分数据总量和当前筛选结果。";
 
-  const effectiveExportMaxRows = Math.min(Math.max(exportMaxRows || 1, 1), EXPORT_SINGLE_FILE_LIMIT);
+  const parsedExportMaxRows = Number(exportMaxRows);
+  const effectiveExportMaxRows =
+    Number.isFinite(parsedExportMaxRows) && parsedExportMaxRows > 0
+      ? Math.floor(parsedExportMaxRows)
+      : DEFAULT_EXPORT_MAX_ROWS;
   const exportRowsThisRun = exportCount === null ? effectiveExportMaxRows : Math.min(exportCount, effectiveExportMaxRows);
   const exportWouldTruncate = exportCount !== null && exportCount > exportRowsThisRun;
-  const exportExceedsSingleFileLimit = exportCount !== null && exportCount > EXPORT_SINGLE_FILE_LIMIT;
+  const batchCount = exportCount !== null ? Math.ceil(Math.min(exportCount, effectiveExportMaxRows) / EXPORT_BATCH_SIZE) : 0;
 
   // ── Helper ──────────────────────────────────────────────
 
@@ -465,13 +489,15 @@ export function App() {
 
   // ── Handlers: candidates ────────────────────────────────
 
-  async function loadCandidates(forceRefresh = false) {
+  async function loadCandidates(forceRefresh = false, signal?: AbortSignal) {
     if (forceRefresh) clearCandidateCache();
+    const requestId = ++candidateLoadSeq.current;
     const finishDbOperation = beginDbOperation("正在查询数据库");
     setLoading(true);
     setError("");
     try {
-      const data = await getCandidates(filters);
+      const data = await getCandidates(filters, signal);
+      if (signal?.aborted || candidateLoadSeq.current !== requestId) return;
       setItems(data.items);
       setTotal(data.pagination.total);
       setTotalPages(data.pagination.total_pages || 1);
@@ -480,16 +506,19 @@ export function App() {
       setIsCached(data.cached !== false);
       setDataAge(Date.now());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (candidateLoadSeq.current === requestId) {
+        setError(err instanceof Error ? err.message : "加载失败");
+      }
     } finally {
-      setLoading(false);
+      if (candidateLoadSeq.current === requestId) setLoading(false);
       finishDbOperation();
     }
   }
 
-  function updateFilter<K extends keyof CandidateFilters>(key: K, value: CandidateFilters[K]) {
+  const updateFilter = useCallback(<K extends keyof CandidateFilters,>(key: K, value: CandidateFilters[K]) => {
     setFilters((prev) => ({ ...prev, [key]: value, page: key === "page" ? (value as number) : 1 }));
-  }
+  }, []);
 
   function changeScope(scope: DataScope) {
     setDataScope(scope);
@@ -560,26 +589,34 @@ export function App() {
 
   // ── Handlers: compare ───────────────────────────────────
 
-  async function loadKeywordCompare() {
+  async function loadKeywordCompare(signal?: AbortSignal) {
+    const requestId = ++compareLoadSeq.current;
     const finishDbOperation = beginDbOperation("正在查询横向对比数据");
     setCompareLoading(true);
     setCompareError("");
     try {
-      const data = await getKeywordCompare(compareFilters);
+      const data = await getKeywordCompare(compareFilters, signal);
+      if (signal?.aborted || compareLoadSeq.current !== requestId) return;
       setCompareItems(data.items);
       setCompareMonths(data.months.map((item) => item.data_month.slice(0, 10)));
       setComparePagination(data.pagination);
     } catch (err) {
-      setCompareError(err instanceof Error ? err.message : "横向对比加载失败");
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (compareLoadSeq.current === requestId) {
+        setCompareError(err instanceof Error ? err.message : "横向对比加载失败");
+      }
     } finally {
-      setCompareLoading(false);
+      if (compareLoadSeq.current === requestId) setCompareLoading(false);
       finishDbOperation();
     }
   }
 
-  function updateCompareFilter<K extends keyof KeywordCompareFilters>(key: K, value: KeywordCompareFilters[K]) {
+  const updateCompareFilter = useCallback(<K extends keyof KeywordCompareFilters,>(
+    key: K,
+    value: KeywordCompareFilters[K],
+  ) => {
     setCompareFilters((prev) => ({ ...prev, [key]: value, page: key === "page" ? (value as number) : 1 }));
-  }
+  }, []);
 
   async function changeCompareState(item: KeywordCompareItem, status: string) {
     const finishDbOperation = beginDbOperation("正在保存横向对比关键词状态");
@@ -845,25 +882,6 @@ export function App() {
 
   // ── Handlers: export ────────────────────────────────────
 
-  async function exportExcel() {
-    const finishDbOperation = beginDbOperation("正在导出 Excel");
-    setExportLoading(true);
-    setExportError("");
-    try {
-      const blob = await downloadCandidateExport(filters, "选品候选词", 5000);
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "选品候选词.xlsx";
-      link.click();
-      URL.revokeObjectURL(link.href);
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : "导出失败");
-    } finally {
-      setExportLoading(false);
-      finishDbOperation();
-    }
-  }
-
   async function handleExportPreviewCount() {
     setExportLoading(true);
     setExportError("");
@@ -884,17 +902,37 @@ export function App() {
     setExportLoading(true);
     setExportError("");
     try {
-      const blob = await downloadExportFile(
-        { source: exportSource, ...exportFilters },
-        exportFormat,
-        exportFilename || "export",
-        effectiveExportMaxRows,
-      );
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `${exportFilename || "export"}.${exportFormat}`;
-      link.click();
-      URL.revokeObjectURL(link.href);
+      const totalCount = exportCount ?? 0;
+      const totalToExport = totalCount > 0 ? Math.min(totalCount, effectiveExportMaxRows) : effectiveExportMaxRows;
+      const batchCount = Math.ceil(totalToExport / EXPORT_BATCH_SIZE);
+
+      for (let i = 0; i < batchCount; i++) {
+        const offset = i * EXPORT_BATCH_SIZE;
+        const remaining = totalToExport - offset;
+        const thisBatch = Math.min(EXPORT_BATCH_SIZE, remaining);
+
+        setDbOperationMessage(batchCount > 1 ? `正在导出 ${i + 1}/${batchCount}...` : "正在导出文件");
+
+        const batchLabel = batchCount > 1 ? `_part${i + 1}of${batchCount}` : "";
+        const batchFilename = `${exportFilename || "export"}${batchLabel}`;
+
+        const blob = await downloadExportFile(
+          { source: exportSource, offset, ...exportFilters },
+          exportFormat,
+          batchFilename,
+          thisBatch,
+        );
+
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `${batchFilename}.${exportFormat}`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+
+        if (i < batchCount - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
     } catch (err) {
       setExportError(err instanceof Error ? err.message : "下载失败");
     } finally {
@@ -957,12 +995,6 @@ export function App() {
               <RefreshCw size={16} />
               刷新
             </button>
-            {(activeView === "opportunities" || activeView === "favorites") && (
-              <button className="button primary" disabled={exportLoading} onClick={() => void exportExcel()}>
-                <Download size={16} />
-                {exportLoading ? "正在导出..." : "导出 Excel"}
-              </button>
-            )}
           </div>
         </header>
 
@@ -987,6 +1019,7 @@ export function App() {
             setCompareFilters={setCompareFilters}
             months={months}
             categories={categories}
+            holidayEvents={holidayEvents}
             compareItems={compareItems}
             compareMonths={compareMonths}
             comparePagination={comparePagination}
@@ -1009,6 +1042,7 @@ export function App() {
             setExportFilters={setExportFilters}
             months={months}
             categories={categories}
+            holidayEvents={holidayEvents}
             trendOptions={trendOptions}
             candidateLevelOptions={candidateLevelOptions}
             compareTrendOptions={compareTrendOptions}
@@ -1028,7 +1062,8 @@ export function App() {
             effectiveExportMaxRows={effectiveExportMaxRows}
             exportRowsThisRun={exportRowsThisRun}
             exportWouldTruncate={exportWouldTruncate}
-            exportExceedsSingleFileLimit={exportExceedsSingleFileLimit}
+            exportBatchCount={batchCount}
+            exportBatchSize={EXPORT_BATCH_SIZE}
             onPreviewCount={handleExportPreviewCount}
             onDownload={handleExportDownload}
             onClearPreview={handleClearExportPreview}

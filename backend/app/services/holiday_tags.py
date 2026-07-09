@@ -1,15 +1,26 @@
-"""Compute keyword holiday tags by matching active holiday terms against keywords.
+"""Compute keyword holiday tags from the holiday lexicon.
 
-Writes results to keyword_holiday_tags cache table.  The keyword compare
-API reads from this cache rather than doing real-time text matching.
+The keyword compare API reads from keyword_holiday_tags; it does not do
+real-time holiday term matching. Current business rules:
+
+- Halloween: keyword/translation matches the configured Halloween terms and
+  the complete Aug-Oct window is rising.
+- Christmas: keyword/translation matches the configured Christmas terms and
+  the complete Oct-Dec window is rising.
+
+Rows that only match a term but do not rise in the holiday window are not
+written to the cache.
 """
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 
 import psycopg
-from psycopg.rows import dict_row
+
+
+SUPPORTED_HOLIDAY_CODES = {"halloween", "christmas"}
 
 
 def refresh_holiday_tags(
@@ -17,26 +28,24 @@ def refresh_holiday_tags(
     *,
     marketplace: str,
 ) -> int:
-    """Rebuild keyword_holiday_tags for the given marketplace.
-
-    Returns the number of tag rows inserted.
-    """
-    # Disable statement_timeout for this long-running batch operation
+    """Rebuild keyword_holiday_tags for the supported holidays."""
     with conn.cursor() as cur:
-        cur.execute("SET LOCAL statement_timeout = '300s'")
+        cur.execute("SET LOCAL statement_timeout = '600s'")
 
     events = _load_active_events(conn, marketplace)
     if not events:
         return 0
 
-    # Clear existing tags for this marketplace
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM keyword_holiday_tags WHERE marketplace = %s",
-            [marketplace],
+            """
+            DELETE FROM keyword_holiday_tags
+            WHERE marketplace = %s
+              AND holiday_code = ANY(%s)
+            """,
+            [marketplace, list(SUPPORTED_HOLIDAY_CODES)],
         )
 
-    # Determine the data year range for trend_year assignment
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -50,54 +59,39 @@ def refresh_holiday_tags(
         )
         row = cur.fetchone()
         if not row or row["min_year"] is None:
+            conn.commit()
             return 0
         min_year, max_year = row["min_year"], row["max_year"]
 
-    # Load all keywords for this marketplace (id, keyword, translation)
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT
-                k.id AS keyword_id,
-                k.keyword_normalized AS keyword,
-                m.keyword_translation,
-                m.marketplace
-            FROM keywords k
-            JOIN keyword_monthly_metrics m
-              ON m.keyword_id = k.id AND m.marketplace = %s
-            GROUP BY k.id, k.keyword_normalized, m.keyword_translation, m.marketplace
-            """,
-            [marketplace],
-        )
-        keywords = cur.fetchall()
+    keywords = _load_keyword_texts(conn, marketplace)
 
     if not keywords:
+        conn.commit()
         return 0
 
-    # Pre-load monthly search volumes for all keywords
+    needed_months = _event_month_numbers(events)
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT keyword_id, data_month, search_volume
             FROM keyword_monthly_metrics
-            WHERE marketplace = %s AND search_volume IS NOT NULL
+            WHERE marketplace = %s
+              AND EXTRACT(MONTH FROM data_month)::int = ANY(%s)
+              AND search_volume IS NOT NULL
             ORDER BY keyword_id, data_month
             """,
-            [marketplace],
+            [marketplace, needed_months],
         )
         monthly_rows = cur.fetchall()
 
-    # Build keyword_id -> {data_month: search_volume} map
     monthly: dict[int, dict[str, float]] = {}
     for row in monthly_rows:
         month_str = row["data_month"].isoformat()[:7]
         monthly.setdefault(row["keyword_id"], {})[month_str] = float(row["search_volume"])
 
-    # Compile term patterns per event
     event_patterns = _build_patterns(events)
-
-    # Match and compute tags
     tags_to_insert: list[dict] = []
+
     for kw in keywords:
         kid = kw["keyword_id"]
         kw_monthly = monthly.get(kid, {})
@@ -116,98 +110,43 @@ def refresh_holiday_tags(
             if not matched_terms:
                 continue
 
-            # Determine which trend years to check
-            available_months = sorted(kw_monthly.keys())
             for year in range(min_year, max_year + 1):
-                start_m = event["trend_start_month"]
-                end_m = event["trend_end_month"]
-                s_month = f"{year}-{start_m:02d}"
-                e_month = f"{year}-{end_m:02d}"
-
-                # Find months in this trend window
-                window_months = [
-                    m for m in available_months
-                    if s_month <= m <= e_month
-                ]
-
-                # Skip years where the trend window has zero data (future years etc.)
-                if len(window_months) == 0:
+                window_months = _trend_window_months(
+                    year,
+                    event["trend_start_month"],
+                    event["trend_end_month"],
+                )
+                if not all(month in kw_monthly for month in window_months):
                     continue
 
-                window_volumes = [kw_monthly[m] for m in window_months]
-                start_vol = window_volumes[0]
-                end_vol = window_volumes[-1]
-
-                # Only 1 month of data → suspected (hit term but can't confirm trend)
-                if len(window_months) == 1:
-                    tags_to_insert.append({
-                        "keyword_id": kid,
-                        "marketplace": marketplace,
-                        "holiday_event_id": event["id"],
-                        "holiday_code": code,
-                        "holiday_name_cn": event["name_cn"],
-                        "confidence": "suspected",
-                        "matched_terms": matched_terms,
-                        "match_sources": match_sources,
-                        "trend_year": year,
-                        "trend_start_month": start_m,
-                        "trend_end_month": end_m,
-                        "start_volume": start_vol,
-                        "end_volume": end_vol,
-                        "growth_rate": None,
-                        "is_trend_confirmed": False,
-                    })
-                    continue
-
-                # 2+ months but start volume invalid → suspected
-                if start_vol is None or start_vol <= 0:
-                    tags_to_insert.append({
-                        "keyword_id": kid,
-                        "marketplace": marketplace,
-                        "holiday_event_id": event["id"],
-                        "holiday_code": code,
-                        "holiday_name_cn": event["name_cn"],
-                        "confidence": "suspected",
-                        "matched_terms": matched_terms,
-                        "match_sources": match_sources,
-                        "trend_year": year,
-                        "trend_start_month": start_m,
-                        "trend_end_month": end_m,
-                        "start_volume": start_vol,
-                        "end_volume": end_vol,
-                        "growth_rate": None,
-                        "is_trend_confirmed": False,
-                    })
+                start_vol = kw_monthly[window_months[0]]
+                end_vol = kw_monthly[window_months[-1]]
+                if start_vol <= 0 or end_vol <= start_vol:
                     continue
 
                 growth = (end_vol - start_vol) / start_vol
-                trend_confirmed = _is_trend_confirmed(
-                    growth, window_volumes, event["min_growth_rate"]
-                )
-
                 tags_to_insert.append({
                     "keyword_id": kid,
                     "marketplace": marketplace,
                     "holiday_event_id": event["id"],
                     "holiday_code": code,
                     "holiday_name_cn": event["name_cn"],
-                    "confidence": "confirmed" if trend_confirmed else "suspected",
+                    "confidence": "confirmed",
                     "matched_terms": matched_terms,
                     "match_sources": match_sources,
                     "trend_year": year,
-                    "trend_start_month": start_m,
-                    "trend_end_month": end_m,
+                    "trend_start_month": event["trend_start_month"],
+                    "trend_end_month": event["trend_end_month"],
                     "start_volume": start_vol,
                     "end_volume": end_vol,
                     "growth_rate": round(growth, 4),
-                    "is_trend_confirmed": trend_confirmed,
+                    "is_trend_confirmed": True,
                 })
 
     if not tags_to_insert:
+        conn.commit()
         return 0
 
-    # Bulk insert
-    import json
     with conn.cursor() as cur:
         for tag in tags_to_insert:
             cur.execute(
@@ -221,9 +160,13 @@ def refresh_holiday_tags(
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (keyword_id, marketplace, holiday_event_id, trend_year)
                 DO UPDATE SET
+                    holiday_code = EXCLUDED.holiday_code,
+                    holiday_name_cn = EXCLUDED.holiday_name_cn,
                     confidence = EXCLUDED.confidence,
                     matched_terms = EXCLUDED.matched_terms,
                     match_sources = EXCLUDED.match_sources,
+                    trend_start_month = EXCLUDED.trend_start_month,
+                    trend_end_month = EXCLUDED.trend_end_month,
                     start_volume = EXCLUDED.start_volume,
                     end_volume = EXCLUDED.end_volume,
                     growth_rate = EXCLUDED.growth_rate,
@@ -231,12 +174,20 @@ def refresh_holiday_tags(
                     updated_at = NOW()
                 """,
                 [
-                    tag["keyword_id"], tag["marketplace"], tag["holiday_event_id"],
-                    tag["holiday_code"], tag["holiday_name_cn"], tag["confidence"],
+                    tag["keyword_id"],
+                    tag["marketplace"],
+                    tag["holiday_event_id"],
+                    tag["holiday_code"],
+                    tag["holiday_name_cn"],
+                    tag["confidence"],
                     json.dumps(tag["matched_terms"], ensure_ascii=False),
                     json.dumps(tag["match_sources"], ensure_ascii=False),
-                    tag["trend_year"], tag["trend_start_month"], tag["trend_end_month"],
-                    tag["start_volume"], tag["end_volume"], tag["growth_rate"],
+                    tag["trend_year"],
+                    tag["trend_start_month"],
+                    tag["trend_end_month"],
+                    tag["start_volume"],
+                    tag["end_volume"],
+                    tag["growth_rate"],
                     tag["is_trend_confirmed"],
                 ],
             )
@@ -244,20 +195,19 @@ def refresh_holiday_tags(
     return len(tags_to_insert)
 
 
-# ── Helpers ──────────────────────────────────────────────────────
-
 def _load_active_events(conn: psycopg.Connection, marketplace: str) -> list[dict]:
-    """Load active holiday events with their active terms."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT e.*, t.id AS term_id, t.term, t.term_normalized, t.match_type
             FROM holiday_events e
             JOIN holiday_terms t ON t.event_id = e.id AND t.is_active
-            WHERE e.is_active AND e.marketplace = %s
+            WHERE e.is_active
+              AND e.marketplace = %s
+              AND e.code = ANY(%s)
             ORDER BY e.code, t.term_normalized
             """,
-            [marketplace],
+            [marketplace, list(SUPPORTED_HOLIDAY_CODES)],
         )
         rows = cur.fetchall()
 
@@ -266,10 +216,11 @@ def _load_active_events(conn: psycopg.Connection, marketplace: str) -> list[dict
         eid = r["id"]
         if eid not in events:
             events[eid] = {
-                "id": eid, "code": r["code"], "name_cn": r["name_cn"],
+                "id": eid,
+                "code": r["code"],
+                "name_cn": r["name_cn"],
                 "trend_start_month": r["trend_start_month"],
                 "trend_end_month": r["trend_end_month"],
-                "min_growth_rate": float(r["min_growth_rate"]),
                 "terms": [],
             }
         events[eid]["terms"].append({
@@ -280,28 +231,75 @@ def _load_active_events(conn: psycopg.Connection, marketplace: str) -> list[dict
     return list(events.values())
 
 
+def _load_keyword_texts(conn: psycopg.Connection, marketplace: str) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT keyword_id, keyword, keyword_translation, marketplace
+            FROM keyword_compare_snapshot
+            WHERE marketplace = %s
+            """,
+            [marketplace],
+        )
+        rows = cur.fetchall()
+    if rows:
+        return rows
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (m.keyword_id)
+                k.id AS keyword_id,
+                k.keyword_normalized AS keyword,
+                m.keyword_translation,
+                m.marketplace
+            FROM keyword_monthly_metrics m
+            JOIN keywords k ON k.id = m.keyword_id
+            WHERE m.marketplace = %s
+            ORDER BY m.keyword_id, m.data_month DESC
+            """,
+            [marketplace],
+        )
+        return cur.fetchall()
+
+
+def _event_month_numbers(events: Sequence[dict]) -> list[int]:
+    months: set[int] = set()
+    for event in events:
+        start_month = event["trend_start_month"]
+        end_month = event["trend_end_month"]
+        if start_month <= end_month:
+            months.update(range(start_month, end_month + 1))
+        else:
+            months.update(range(start_month, 13))
+            months.update(range(1, end_month + 1))
+    return sorted(months)
+
+
+def _trend_window_months(year: int, start_month: int, end_month: int) -> list[str]:
+    if start_month <= end_month:
+        return [f"{year}-{month:02d}" for month in range(start_month, end_month + 1)]
+    return (
+        [f"{year}-{month:02d}" for month in range(start_month, 13)]
+        + [f"{year + 1}-{month:02d}" for month in range(1, end_month + 1)]
+    )
+
+
 def _build_patterns(events: Sequence[dict]) -> dict[str, list[dict]]:
-    """Compile regex patterns for each event's terms."""
     result: dict[str, list[dict]] = {}
     for event in events:
         patterns: list[dict] = []
-        for t in event["terms"]:
-            if t["match_type"] == "word":
-                escaped = re.escape(t["normalized"])
-                patterns.append({
-                    "type": "word",
-                    "term": t["term"],
-                    "normalized": t["normalized"],
-                    "regex": re.compile(rf"(?<![a-z]){escaped}(?![a-z])", re.IGNORECASE),
-                })
+        for term in event["terms"]:
+            escaped = re.escape(term["normalized"])
+            if term["match_type"] == "word":
+                regex = re.compile(rf"(?<![a-z]){escaped}(?![a-z])", re.IGNORECASE)
             else:
-                escaped = re.escape(t["normalized"])
-                patterns.append({
-                    "type": "phrase",
-                    "term": t["term"],
-                    "normalized": t["normalized"],
-                    "regex": re.compile(escaped, re.IGNORECASE),
-                })
+                regex = re.compile(escaped, re.IGNORECASE)
+            patterns.append({
+                "term": term["term"],
+                "normalized": term["normalized"],
+                "regex": regex,
+            })
         result[event["code"]] = patterns
     return result
 
@@ -323,38 +321,13 @@ def _match_keyword(
         if not text:
             continue
         text_lower = text.lower()
-        for p in patterns:
-            if p["term"] in seen:
+        for pattern in patterns:
+            if pattern["term"] in seen:
                 continue
-            if p["regex"].search(text_lower):
-                seen.add(p["term"])
-                matched_terms.append(p["term"])
+            if pattern["regex"].search(text_lower):
+                seen.add(pattern["term"])
+                matched_terms.append(pattern["term"])
                 if source not in match_sources:
                     match_sources.append(source)
 
     return matched_terms, match_sources
-
-
-def _is_trend_confirmed(
-    growth: float,
-    window_volumes: Sequence[float],
-    min_growth_rate: float,
-) -> bool:
-    """Check if the trend window meets confirmation criteria."""
-    if len(window_volumes) < 2:
-        return False
-    start = window_volumes[0]
-    end = window_volumes[-1]
-    if start <= 0:
-        return False
-    if end <= start:
-        return False
-    if growth < min_growth_rate:
-        return False
-    # For 3+ month windows: check no sharp drop after middle peak
-    if len(window_volumes) >= 3:
-        mid_idx = len(window_volumes) // 2
-        mid_vol = window_volumes[mid_idx]
-        if mid_vol > 0 and end < mid_vol * 0.9:
-            return False
-    return True

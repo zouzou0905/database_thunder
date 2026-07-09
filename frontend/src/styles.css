@@ -581,6 +581,20 @@ select:focus {
   padding: 16px;
 }
 
+.export-options-panel {
+  position: relative;
+  z-index: 4;
+  padding: 16px;
+  overflow: visible;
+}
+
+.export-options-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) minmax(180px, 1fr) minmax(280px, 1.35fr);
+  gap: 12px;
+  align-items: end;
+}
+
 .export-options {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
@@ -590,6 +604,8 @@ select:focus {
 
 .export-row-limit {
   display: grid;
+  grid-template-columns: minmax(104px, 0.75fr) minmax(172px, 1fr);
+  align-items: center;
   gap: 8px;
 }
 
@@ -1811,6 +1827,14 @@ tbody tr:hover {
     grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
 
+  .export-options-grid {
+    grid-template-columns: minmax(220px, 1fr) minmax(170px, 0.8fr);
+  }
+
+  .export-options-grid .field:last-child {
+    grid-column: 1 / -1;
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(130px, 1fr));
   }
@@ -1851,8 +1875,13 @@ tbody tr:hover {
 
   .filter-grid,
   .filter-grid.compact,
+  .export-options-grid,
   .metric-grid,
   .scope-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .export-row-limit {
     grid-template-columns: 1fr;
   }
 

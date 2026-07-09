@@ -18,6 +18,111 @@ from __future__ import annotations
 import psycopg
 
 
+SNAPSHOT_BUILD_TABLE = "_keyword_compare_snapshot_build"
+SNAPSHOT_OLD_TABLE = "_keyword_compare_snapshot_old"
+
+
+SNAPSHOT_INDEXES: tuple[tuple[str, str, str], ...] = (
+    ("_snapshot_build_idx_market", "idx_compare_snapshot_market", "(marketplace)"),
+    ("_snapshot_build_idx_trend", "idx_compare_snapshot_trend", "(marketplace, trend_type)"),
+    ("_snapshot_build_idx_volume", "idx_compare_snapshot_volume", "(marketplace, end_search_volume DESC)"),
+    (
+        "_snapshot_build_idx_growth",
+        "idx_compare_snapshot_growth",
+        "(marketplace, search_volume_growth_rate DESC)",
+    ),
+    ("_snapshot_build_idx_category", "idx_compare_snapshot_category", "(marketplace, category)"),
+    (
+        "_snapshot_build_idx_growth_order",
+        "idx_compare_snapshot_growth_order",
+        "(marketplace, search_volume_growth_rate DESC NULLS LAST, end_search_volume DESC NULLS LAST, keyword)",
+    ),
+    (
+        "_snapshot_build_idx_volume_order",
+        "idx_compare_snapshot_volume_order",
+        "(marketplace, end_search_volume DESC NULLS LAST, keyword)",
+    ),
+    (
+        "_snapshot_build_idx_rank_change_order",
+        "idx_compare_snapshot_rank_change_order",
+        "(marketplace, rank_change DESC NULLS LAST, end_search_volume DESC NULLS LAST, keyword)",
+    ),
+    (
+        "_snapshot_build_idx_volume_change_order",
+        "idx_compare_snapshot_volume_change_order",
+        "(marketplace, search_volume_change DESC NULLS LAST, end_search_volume DESC NULLS LAST, keyword)",
+    ),
+    (
+        "_snapshot_build_idx_month_count_order",
+        "idx_compare_snapshot_month_count_order",
+        "(marketplace, month_count DESC NULLS LAST, end_search_volume DESC NULLS LAST, keyword)",
+    ),
+    ("_snapshot_build_idx_ppc_filter", "idx_compare_snapshot_ppc_filter", "(marketplace, ppc_bid_mid)"),
+    ("_snapshot_build_idx_spr_filter", "idx_compare_snapshot_spr_filter", "(marketplace, spr)"),
+)
+
+SNAPSHOT_GIN_INDEXES: tuple[tuple[str, str, str], ...] = (
+    (
+        "_snapshot_build_idx_market_keyword_trgm",
+        "idx_compare_snapshot_market_keyword_trgm",
+        "(marketplace, keyword gin_trgm_ops)",
+    ),
+    (
+        "_snapshot_build_idx_market_translation_trgm",
+        "idx_compare_snapshot_market_translation_trgm",
+        "(marketplace, keyword_translation gin_trgm_ops)",
+    ),
+)
+
+
+def _build_snapshot_sql(sql: str) -> str:
+    return sql.replace("keyword_compare_snapshot", SNAPSHOT_BUILD_TABLE)
+
+
+def _create_snapshot_build_indexes(cur: psycopg.Cursor) -> None:
+    cur.execute(
+        f"""
+        ALTER TABLE {SNAPSHOT_BUILD_TABLE}
+        ADD CONSTRAINT {SNAPSHOT_BUILD_TABLE}_pkey
+        PRIMARY KEY (keyword_id, marketplace)
+        """
+    )
+    cur.execute(
+        f"""
+        ALTER TABLE {SNAPSHOT_BUILD_TABLE}
+        ADD CONSTRAINT {SNAPSHOT_BUILD_TABLE}_keyword_id_fkey
+        FOREIGN KEY (keyword_id) REFERENCES keywords(id) NOT VALID
+        """
+    )
+    for build_name, _final_name, columns in SNAPSHOT_INDEXES:
+        cur.execute(f"CREATE INDEX {build_name} ON {SNAPSHOT_BUILD_TABLE} {columns}")
+    for build_name, _final_name, columns in SNAPSHOT_GIN_INDEXES:
+        cur.execute(f"CREATE INDEX {build_name} ON {SNAPSHOT_BUILD_TABLE} USING GIN {columns}")
+
+
+def _swap_snapshot_build_table(cur: psycopg.Cursor) -> None:
+    cur.execute("LOCK TABLE keyword_compare_snapshot IN ACCESS EXCLUSIVE MODE")
+    cur.execute(f"DROP TABLE IF EXISTS {SNAPSHOT_OLD_TABLE}")
+    cur.execute(f"ALTER TABLE keyword_compare_snapshot RENAME TO {SNAPSHOT_OLD_TABLE}")
+    cur.execute(f"ALTER TABLE {SNAPSHOT_BUILD_TABLE} RENAME TO keyword_compare_snapshot")
+    cur.execute(f"DROP TABLE {SNAPSHOT_OLD_TABLE}")
+    cur.execute(
+        f"""
+        ALTER TABLE keyword_compare_snapshot
+        RENAME CONSTRAINT {SNAPSHOT_BUILD_TABLE}_pkey TO keyword_compare_snapshot_pkey
+        """
+    )
+    cur.execute(
+        f"""
+        ALTER TABLE keyword_compare_snapshot
+        RENAME CONSTRAINT {SNAPSHOT_BUILD_TABLE}_keyword_id_fkey
+        TO keyword_compare_snapshot_keyword_id_fkey
+        """
+    )
+    for build_name, final_name, _columns in (*SNAPSHOT_INDEXES, *SNAPSHOT_GIN_INDEXES):
+        cur.execute(f"ALTER INDEX {build_name} RENAME TO {final_name}")
+
+
 def refresh_compare_snapshot(
     conn: psycopg.Connection,
     *,
@@ -32,6 +137,14 @@ def refresh_compare_snapshot(
     params = {"marketplace": marketplace}
 
     with conn.cursor() as cur:
+        cur.execute(f"DROP TABLE IF EXISTS {SNAPSHOT_BUILD_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TABLE {SNAPSHOT_BUILD_TABLE}
+            (LIKE keyword_compare_snapshot INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+            """
+        )
+
         # ── Step 1: per-keyword aggregates into a temp table ──────────
         cur.execute("DROP TABLE IF EXISTS _compare_tmp")
         cur.execute(
@@ -80,19 +193,8 @@ def refresh_compare_snapshot(
 
         # ── Step 3: INSERT base rows ────────────────────────────────────
         cur.execute(
-            "DELETE FROM keyword_compare_snapshot WHERE marketplace = %(marketplace)s",
-            params,
-        )
-        cur.execute("SELECT to_regclass('public.keyword_compare_range_cache') AS cache_table")
-        cache_row = cur.fetchone()
-        cache_table = cache_row["cache_table"] if isinstance(cache_row, dict) else cache_row[0]
-        if cache_table:
-            cur.execute(
-                "DELETE FROM keyword_compare_range_cache WHERE marketplace = %(marketplace)s",
-                params,
-            )
-        cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             INSERT INTO keyword_compare_snapshot (
                 keyword_id, marketplace, keyword,
                 first_month, last_month, month_count, total_months,
@@ -106,15 +208,21 @@ def refresh_compare_snapshot(
                 'volatile', '波动观察'
             FROM _compare_tmp t
             JOIN keywords k ON k.id = t.keyword_id
-            """,
+            """
+            ),
             {**params, "total_months": total_months},
         )
         inserted = cur.rowcount
         print(f"  Inserted {inserted} keyword base rows.", flush=True)
 
+        # ANALYZE the freshly-populated snapshot so subsequent UPDATEs use
+        # sensible query plans instead of default (often terrible) estimates.
+        cur.execute(f"ANALYZE {SNAPSHOT_BUILD_TABLE}")
+
         # ── Step 4: first-month values ──────────────────────────────────
         cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             UPDATE keyword_compare_snapshot s
             SET
                 start_search_volume = fm.search_volume,
@@ -125,12 +233,14 @@ def refresh_compare_snapshot(
               AND s.first_month  = fm.data_month
               AND s.marketplace  = %(marketplace)s
             """,
+            ),
             params,
         )
 
         # ── Step 5: last-month values (most fields come from here) ──────
         cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             UPDATE keyword_compare_snapshot s
             SET
                 end_search_volume      = lm.search_volume,
@@ -148,12 +258,14 @@ def refresh_compare_snapshot(
               AND s.last_month   = lm.data_month
               AND s.marketplace  = %(marketplace)s
             """,
+            ),
             params,
         )
 
         # ── Step 5.5: prev-month and YoY search volumes for 环比/同比 ──
         cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             UPDATE keyword_compare_snapshot s
             SET
                 prev_month_search_volume = pm.prev_month_search_volume,
@@ -188,12 +300,14 @@ def refresh_compare_snapshot(
               AND s.marketplace = pm.marketplace
               AND s.marketplace = %(marketplace)s
             """,
+            ),
             params,
         )
 
         # ── Step 6: derived columns ─────────────────────────────────────
         cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             UPDATE keyword_compare_snapshot
             SET
                 search_volume_change = CASE
@@ -232,6 +346,7 @@ def refresh_compare_snapshot(
                 END
             WHERE marketplace = %(marketplace)s
             """,
+            ),
             params,
         )
 
@@ -240,7 +355,8 @@ def refresh_compare_snapshot(
         #   avg_search_volume, stddev, CV, linear regression slope & R², gap_count.
         # These feed into the 5-category classification in Step 7.
         cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             WITH unnested AS (
                 SELECT
                     s.keyword_id,
@@ -283,6 +399,7 @@ def refresh_compare_snapshot(
               AND s.marketplace = ms.marketplace
               AND s.marketplace = %(marketplace)s
             """,
+            ),
             params,
         )
 
@@ -294,7 +411,8 @@ def refresh_compare_snapshot(
         #   4. seasonal  — gappy pattern, irregular but not rare
         #   5. volatile  — everything else
         cur.execute(
-            """
+            _build_snapshot_sql(
+                """
             UPDATE keyword_compare_snapshot
             SET
                 trend_type = CASE
@@ -362,10 +480,23 @@ def refresh_compare_snapshot(
                 END
             WHERE marketplace = %(marketplace)s
             """,
+            ),
             params,
         )
 
         # ── Clean up ────────────────────────────────────────────────────
         cur.execute("DROP TABLE IF EXISTS _compare_tmp")
+        print("  Creating snapshot indexes on build table ...", flush=True)
+        _create_snapshot_build_indexes(cur)
+        cur.execute("SELECT to_regclass('public.keyword_compare_range_cache') AS cache_table")
+        cache_row = cur.fetchone()
+        cache_table = cache_row["cache_table"] if isinstance(cache_row, dict) else cache_row[0]
+        if cache_table:
+            cur.execute(
+                "DELETE FROM keyword_compare_range_cache WHERE marketplace = %(marketplace)s",
+                params,
+            )
+        cur.execute(f"ANALYZE {SNAPSHOT_BUILD_TABLE}")
+        _swap_snapshot_build_table(cur)
 
     return inserted

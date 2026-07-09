@@ -4,7 +4,7 @@
 CREATE UNLOGGED TABLE IF NOT EXISTS keyword_compare_range_cache (
     start_month DATE NOT NULL,
     end_month DATE NOT NULL,
-    keyword_id BIGINT NOT NULL REFERENCES keywords(id),
+    keyword_id BIGINT NOT NULL,
     marketplace TEXT NOT NULL DEFAULT 'UK',
     keyword TEXT NOT NULL,
     keyword_translation TEXT,

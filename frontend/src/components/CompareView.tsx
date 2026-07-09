@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import type { CategoryItem, KeywordCompareFilters, KeywordCompareItem, MonthItem, Pagination as PaginationType } from "../types";
+import type { CategoryItem, HolidayEvent, KeywordCompareFilters, KeywordCompareItem, MonthItem, Pagination as PaginationType } from "../types";
 import { formatGrowthPercent, formatNumber, formatPercent, formatMonth, statusLabel } from "../utils";
 import { AppleSelect } from "./AppleSelect";
 import type { SelectOption } from "./AppleSelect";
@@ -97,6 +97,7 @@ interface CompareViewProps {
   setCompareFilters: React.Dispatch<React.SetStateAction<KeywordCompareFilters>>;
   months: MonthItem[];
   categories: CategoryItem[];
+  holidayEvents: HolidayEvent[];
   compareItems: KeywordCompareItem[];
   compareMonths: string[];
   comparePagination: PaginationType;
@@ -118,6 +119,7 @@ export function CompareView({
   setCompareFilters,
   months,
   categories,
+  holidayEvents,
   compareItems,
   compareMonths,
   comparePagination,
@@ -137,8 +139,21 @@ export function CompareView({
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [columnPanelPosition, setColumnPanelPosition] = useState<{ top: number; right: number } | null>(null);
   const [draftColumns, setDraftColumns] = useState<Set<CompareColumnKey>>(new Set(visibleColumns));
+  const [keywordDraft, setKeywordDraft] = useState(compareFilters.keyword);
   const columnToggleRef = useRef<HTMLButtonElement>(null);
   const columnPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setKeywordDraft(compareFilters.keyword);
+  }, [compareFilters.keyword]);
+
+  useEffect(() => {
+    if (keywordDraft === compareFilters.keyword) return;
+    const timeoutId = window.setTimeout(() => {
+      updateCompareFilter("keyword", keywordDraft);
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [keywordDraft, compareFilters.keyword, updateCompareFilter]);
 
   useEffect(() => {
     if (!columnPanelOpen) return;
@@ -187,6 +202,20 @@ export function CompareView({
         : compareItems.filter((item) => item.month_count === item.total_months).length / compareItems.length;
     return { avgEndSearchVolume, avgGrowthRate, continuousRate };
   }, [compareItems]);
+
+  const holidayOptions = useMemo<SelectOption[]>(() => {
+    const activeEvents = holidayEvents
+      .filter((event) => event.is_active && (!compareFilters.marketplace || event.marketplace === compareFilters.marketplace))
+      .sort((a, b) => a.trend_start_month - b.trend_start_month || a.name_cn.localeCompare(b.name_cn));
+    return [
+      { value: "", label: "全部节日" },
+      { value: "__any__", label: "任一节日标签" },
+      ...activeEvents.map((event) => ({
+        value: event.code,
+        label: `${event.name_cn || event.name_en || event.code} (${event.trend_start_month}-${event.trend_end_month}月)`,
+      })),
+    ];
+  }, [holidayEvents, compareFilters.marketplace]);
 
   const compareTableMinWidth = useMemo(() => {
     const COL_WIDTHS: Record<CompareColumnKey, number> = {
@@ -278,12 +307,10 @@ export function CompareView({
             <div className="input-icon">
               <Search size={15} />
               <input
-                value={compareFilters.keyword}
-                onChange={(event) =>
-                  setCompareFilters((prev) => ({ ...prev, keyword: event.target.value }))
-                }
+                value={keywordDraft}
+                onChange={(event) => setKeywordDraft(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") updateCompareFilter("page", 1);
+                  if (event.key === "Enter") updateCompareFilter("keyword", keywordDraft);
                 }}
                 placeholder="输入英文或中文"
               />
@@ -309,6 +336,14 @@ export function CompareView({
               options={compareTrendOptions}
               ariaLabel="对比类型"
               onChange={(value) => updateCompareFilter("trend_type", value)}
+            />
+          </Field>
+          <Field label="节日标签">
+            <AppleSelect
+              value={compareFilters.holiday_code}
+              options={holidayOptions}
+              ariaLabel="节日标签"
+              onChange={(value) => updateCompareFilter("holiday_code", value)}
             />
           </Field>
           <Field label="末月搜索量">
@@ -400,6 +435,7 @@ export function CompareView({
                 keyword: "",
                 category: "",
                 trend_type: "",
+                holiday_code: "",
                 search_volume_min: "1000",
                 search_volume_max: "",
                 growth_rate_min: "",

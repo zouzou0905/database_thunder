@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
@@ -59,6 +59,20 @@ SOURCE_COLUMNS = """
     yoy_rate
 """
 
+COUNT_SOURCE_COLUMNS = """
+    keyword_id,
+    keyword,
+    keyword_translation,
+    category,
+    marketplace,
+    end_search_volume,
+    search_volume_growth_rate,
+    month_count,
+    ppc_bid_mid,
+    spr,
+    trend_type
+"""
+
 
 @dataclass(frozen=True)
 class KeywordCompareFilters:
@@ -70,6 +84,7 @@ class KeywordCompareFilters:
     keyword: str | None = None
     category: str | None = None
     trend_type: str | None = None
+    holiday_code: str | None = None
     search_volume_min: float | None = None
     search_volume_max: float | None = None
     growth_rate_min: float | None = None
@@ -113,6 +128,22 @@ def _result_where(filters: KeywordCompareFilters) -> tuple[str, dict[str, Any]]:
         kw_like = f"%{filters.keyword}%"
         where.append("(keyword ILIKE %(keyword)s OR keyword_translation ILIKE %(keyword)s)")
         params["keyword"] = kw_like
+
+    if filters.holiday_code:
+        where.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM keyword_holiday_tags ht
+                WHERE ht.keyword_id = source.keyword_id
+                  AND ht.marketplace = source.marketplace
+                  AND make_date(ht.trend_year, ht.trend_start_month, 1) >= %(start_month)s::date
+                  AND make_date(ht.trend_year, ht.trend_end_month, 1) <= %(end_month)s::date
+                  AND (%(holiday_code)s = '__any__' OR ht.holiday_code = %(holiday_code)s)
+            )
+            """
+        )
+        params["holiday_code"] = filters.holiday_code
 
     if filters.search_volume_min is not None:
         where.append("end_search_volume >= %(search_volume_min)s")
@@ -414,18 +445,19 @@ def _snapshot_has_range(conn: psycopg.Connection, marketplace: str | None) -> bo
         return bool(row["ok"])
 
 
-def _source_cte_sql(use_snapshot: bool) -> str:
+def _source_cte_sql(use_snapshot: bool, *, count_only: bool = False) -> str:
+    columns = COUNT_SOURCE_COLUMNS if count_only else SOURCE_COLUMNS
     if use_snapshot:
         return f"""
             source AS (
-                SELECT {SOURCE_COLUMNS}
+                SELECT {columns}
                 FROM keyword_compare_snapshot
                 WHERE (%(marketplace)s::text IS NULL OR marketplace = %(marketplace)s::text)
             )
         """
     return f"""
         source AS (
-            SELECT {SOURCE_COLUMNS}
+            SELECT {columns}
             FROM keyword_compare_range_cache
             WHERE start_month = %(start_month)s
               AND end_month = %(end_month)s
@@ -434,7 +466,74 @@ def _source_cte_sql(use_snapshot: bool) -> str:
     """
 
 
+def _scenario_source_cte_sql(*, count_only: bool = False) -> str:
+    columns = COUNT_SOURCE_COLUMNS if count_only else SOURCE_COLUMNS
+    return f"""
+        source AS (
+            SELECT {columns}
+            FROM keyword_compare_scenario_snapshot
+            WHERE scenario_code = %(scenario_code)s
+              AND marketplace = %(marketplace)s
+              AND start_month >= %(start_month)s
+              AND end_month <= %(end_month)s
+        )
+    """
+
+
 def _live_source_cte_sql(base_where_sql: str) -> str:
+    ctes = _compare_ctes(base_where_sql).lstrip()
+    if ctes.upper().startswith("WITH "):
+        ctes = ctes[5:]
+    return f"""
+        {ctes},
+        source AS (
+            SELECT {SOURCE_COLUMNS}
+            FROM classified
+        )
+    """
+
+
+def _interval_snapshot_source_cte_sql(*, count_only: bool = False) -> str:
+    columns = COUNT_SOURCE_COLUMNS if count_only else SOURCE_COLUMNS
+    return f"""
+        source AS (
+            SELECT {columns}
+            FROM keyword_compare_interval_snapshot
+            WHERE interval_code = %(interval_code)s
+              AND marketplace = %(marketplace)s
+              AND start_month = %(start_month)s
+              AND end_month = %(end_month)s
+        )
+    """
+
+
+def _interval_snapshot_matches(
+    conn: psycopg.Connection,
+    start_month: date,
+    end_month: date,
+    marketplace: str | None,
+) -> str | None:
+    """Return the interval_code if a matching interval snapshot covers this range."""
+    if not marketplace:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT interval_code
+            FROM keyword_compare_interval_snapshot
+            WHERE marketplace = %(marketplace)s
+              AND start_month = %(start_month)s
+              AND end_month = %(end_month)s
+            LIMIT 1
+            """,
+            {
+                "marketplace": marketplace,
+                "start_month": start_month,
+                "end_month": end_month,
+            },
+        )
+        row = cur.fetchone()
+        return row["interval_code"] if row else None
     ctes = _compare_ctes(base_where_sql).lstrip()
     if ctes.upper().startswith("WITH "):
         ctes = ctes[5:]
@@ -466,11 +565,48 @@ def _range_cache_exists(conn: psycopg.Connection, start_month: date, end_month: 
         return bool(row["ok"])
 
 
+def _scenario_code_for_filters(
+    conn: psycopg.Connection,
+    filters: KeywordCompareFilters,
+    start_month: date,
+    end_month: date,
+) -> str | None:
+    if filters.holiday_code not in {"christmas", "halloween"} or not filters.marketplace:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT scenario_code
+            FROM keyword_compare_scenario_snapshot
+            WHERE scenario_code = %(scenario_code)s
+              AND marketplace = %(marketplace)s
+              AND start_month >= %(start_month)s
+              AND end_month <= %(end_month)s
+            LIMIT 1
+            """,
+            {
+                "scenario_code": filters.holiday_code,
+                "marketplace": filters.marketplace,
+                "start_month": start_month,
+                "end_month": end_month,
+            },
+        )
+        row = cur.fetchone()
+        return row["scenario_code"] if row else None
+
+
+def _filters_without_scenario_holiday(filters: KeywordCompareFilters, scenario_code: str | None) -> KeywordCompareFilters:
+    if not scenario_code:
+        return filters
+    return replace(filters, holiday_code=None)
+
+
 def _ensure_range_cache(
     conn: psycopg.Connection,
     filters: KeywordCompareFilters,
     start_month: date,
     end_month: date,
+    statement_timeout: str = "120s",
 ) -> None:
     if not filters.marketplace:
         return
@@ -579,46 +715,9 @@ def _ensure_range_cache(
             yoy_change,
             yoy_rate
         FROM classified
-        ON CONFLICT (start_month, end_month, marketplace, keyword_id) DO UPDATE
-        SET
-            keyword = EXCLUDED.keyword,
-            keyword_translation = EXCLUDED.keyword_translation,
-            category = EXCLUDED.category,
-            first_month = EXCLUDED.first_month,
-            last_month = EXCLUDED.last_month,
-            month_count = EXCLUDED.month_count,
-            total_months = EXCLUDED.total_months,
-            start_search_volume = EXCLUDED.start_search_volume,
-            end_search_volume = EXCLUDED.end_search_volume,
-            search_volume_change = EXCLUDED.search_volume_change,
-            search_volume_growth_rate = EXCLUDED.search_volume_growth_rate,
-            start_rank = EXCLUDED.start_rank,
-            end_rank = EXCLUDED.end_rank,
-            rank_change = EXCLUDED.rank_change,
-            trend_type = EXCLUDED.trend_type,
-            trend_type_cn = EXCLUDED.trend_type_cn,
-            ppc_bid_mid = EXCLUDED.ppc_bid_mid,
-            spr = EXCLUDED.spr,
-            prev_month_rank = EXCLUDED.prev_month_rank,
-            four_months_ago_rank = EXCLUDED.four_months_ago_rank,
-            twelve_months_ago_rank = EXCLUDED.twelve_months_ago_rank,
-            monthly = EXCLUDED.monthly,
-            avg_search_volume = EXCLUDED.avg_search_volume,
-            stddev_search_volume = EXCLUDED.stddev_search_volume,
-            cv_search_volume = EXCLUDED.cv_search_volume,
-            volume_slope = EXCLUDED.volume_slope,
-            volume_r2 = EXCLUDED.volume_r2,
-            gap_count = EXCLUDED.gap_count,
-            prev_month_search_volume = EXCLUDED.prev_month_search_volume,
-            yoy_search_volume = EXCLUDED.yoy_search_volume,
-            mom_change = EXCLUDED.mom_change,
-            mom_rate = EXCLUDED.mom_rate,
-            yoy_change = EXCLUDED.yoy_change,
-            yoy_rate = EXCLUDED.yoy_rate,
-            generated_at = NOW()
     """
     with conn.cursor() as cur:
-        cur.execute("SET statement_timeout = '120s'")
+        cur.execute(f"SET LOCAL statement_timeout = '{statement_timeout}'")
         cur.execute(lock_sql, params)
         if _range_cache_exists(conn, start_month, end_month, filters.marketplace):
             conn.commit()
@@ -746,32 +845,58 @@ def list_keyword_comparisons(
     user_id: int | None = None,
 ) -> dict[str, Any]:
     start_month, end_month = _resolve_range(conn, filters)
+    scenario_code = _scenario_code_for_filters(conn, filters, start_month, end_month)
+    effective_filters = _filters_without_scenario_holiday(filters, scenario_code)
+    interval_code = None
+    if not scenario_code and filters.marketplace:
+        interval_code = _interval_snapshot_matches(
+            conn, start_month, end_month, filters.marketplace,
+        )
     # Pre-warm range cache for non-full-range queries so subsequent requests are instant
-    if not _is_full_range(conn, start_month, end_month, filters.marketplace) and filters.marketplace:
+    if (
+        not scenario_code
+        and not interval_code
+        and not _is_full_range(conn, start_month, end_month, filters.marketplace)
+        and filters.marketplace
+    ):
         _ensure_range_cache(conn, filters, start_month, end_month)
 
-    result_where_sql, result_params = _result_where(filters)
+    result_where_sql, result_params = _result_where(effective_filters)
     params = {
         **result_params,
         "start_month": start_month,
         "end_month": end_month,
         "marketplace": filters.marketplace,
+        "scenario_code": scenario_code,
+        "interval_code": interval_code,
     }
     use_snapshot = _is_full_range(conn, start_month, end_month, filters.marketplace) and _snapshot_has_range(conn, filters.marketplace)
     use_range_cache = (
+        not scenario_code
+        and not interval_code
+        and
         not use_snapshot
         and bool(filters.marketplace)
         and _range_cache_exists(conn, start_month, end_month, filters.marketplace)
     )
-    if use_snapshot:
+    if scenario_code:
+        source_cte = _scenario_source_cte_sql()
+        count_source_cte = _scenario_source_cte_sql(count_only=True)
+    elif interval_code:
+        source_cte = _interval_snapshot_source_cte_sql()
+        count_source_cte = _interval_snapshot_source_cte_sql(count_only=True)
+    elif use_snapshot:
         source_cte = _source_cte_sql(use_snapshot=True)
+        count_source_cte = _source_cte_sql(use_snapshot=True, count_only=True)
     elif use_range_cache:
         source_cte = _source_cte_sql(use_snapshot=False)
+        count_source_cte = _source_cte_sql(use_snapshot=False, count_only=True)
     else:
         base_where_sql, base_params = _base_where(filters)
         params.update(base_params)
         source_cte = _live_source_cte_sql(base_where_sql)
-    exact_total = use_snapshot or use_range_cache
+        count_source_cte = source_cte
+    exact_total = bool(scenario_code) or bool(interval_code) or use_snapshot or use_range_cache
 
     page = max(filters.page, 1)
     page_size = min(max(filters.page_size, 1), 500)
@@ -836,7 +961,7 @@ def list_keyword_comparisons(
     """
 
     count_sql = f"""
-        WITH {source_cte}
+        WITH {count_source_cte}
         SELECT COUNT(*) AS total
         FROM source
         WHERE {result_where_sql}
@@ -917,27 +1042,38 @@ def list_keyword_comparisons(
 
 def count_keyword_comparisons(conn: psycopg.Connection, filters: KeywordCompareFilters) -> int:
     start_month, end_month = _resolve_range(conn, filters)
+    scenario_code = _scenario_code_for_filters(conn, filters, start_month, end_month)
+    effective_filters = _filters_without_scenario_holiday(filters, scenario_code)
     # Pre-warm range cache for non-full-range queries
-    if not _is_full_range(conn, start_month, end_month, filters.marketplace) and filters.marketplace:
+    if (
+        not scenario_code
+        and not _is_full_range(conn, start_month, end_month, filters.marketplace)
+        and filters.marketplace
+    ):
         _ensure_range_cache(conn, filters, start_month, end_month)
 
-    result_where_sql, result_params = _result_where(filters)
+    result_where_sql, result_params = _result_where(effective_filters)
     params = {
         **result_params,
         "start_month": start_month,
         "end_month": end_month,
         "marketplace": filters.marketplace,
+        "scenario_code": scenario_code,
     }
     use_snapshot = _is_full_range(conn, start_month, end_month, filters.marketplace) and _snapshot_has_range(conn, filters.marketplace)
     use_range_cache = (
+        not scenario_code
+        and
         not use_snapshot
         and bool(filters.marketplace)
         and _range_cache_exists(conn, start_month, end_month, filters.marketplace)
     )
-    if use_snapshot:
-        source_cte = _source_cte_sql(use_snapshot=True)
+    if scenario_code:
+        source_cte = _scenario_source_cte_sql(count_only=True)
+    elif use_snapshot:
+        source_cte = _source_cte_sql(use_snapshot=True, count_only=True)
     elif use_range_cache:
-        source_cte = _source_cte_sql(use_snapshot=False)
+        source_cte = _source_cte_sql(use_snapshot=False, count_only=True)
     else:
         base_where_sql, base_params = _base_where(filters)
         params.update(base_params)
@@ -958,14 +1094,26 @@ def export_comparisons(
     filters: KeywordCompareFilters,
     user_id: int | None = None,
     max_rows: int = 5000,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     start_month, end_month = _resolve_range(conn, filters)
+    scenario_code = _scenario_code_for_filters(conn, filters, start_month, end_month)
+    interval_code = None
+    if not scenario_code and filters.marketplace:
+        interval_code = _interval_snapshot_matches(conn, start_month, end_month, filters.marketplace)
     use_snapshot = _is_full_range(conn, start_month, end_month, filters.marketplace) and _snapshot_has_range(conn, filters.marketplace)
-    if not use_snapshot and filters.marketplace and not _range_cache_exists(conn, start_month, end_month, filters.marketplace):
+    if (
+        not scenario_code
+        and not interval_code
+        and not use_snapshot
+        and filters.marketplace
+        and not _range_cache_exists(conn, start_month, end_month, filters.marketplace)
+    ):
         _ensure_range_cache(conn, filters, start_month, end_month)
 
     page_size = 500
-    page = 1
+    page = (offset // page_size) + 1
+    skip_in_page = offset % page_size
     rows: list[dict[str, Any]] = []
     while len(rows) < max_rows:
         result = list_keyword_comparisons(conn, KeywordCompareFilters(
@@ -973,6 +1121,7 @@ def export_comparisons(
             start_month=filters.start_month, end_month=filters.end_month,
             marketplace=filters.marketplace, keyword=filters.keyword,
             category=filters.category, trend_type=filters.trend_type,
+            holiday_code=filters.holiday_code,
             search_volume_min=filters.search_volume_min,
             search_volume_max=filters.search_volume_max,
             growth_rate_min=filters.growth_rate_min,
@@ -986,6 +1135,9 @@ def export_comparisons(
         items = result["items"]
         if not items:
             break
+        if skip_in_page > 0:
+            items = items[skip_in_page:]
+            skip_in_page = 0
         rows.extend(items)
         if not result["pagination"]["has_more"]:
             break

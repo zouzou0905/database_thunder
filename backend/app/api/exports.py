@@ -178,6 +178,7 @@ def export_preview_count(
     start_month: str | None = Query(default=None),
     end_month: str | None = Query(default=None),
     trend_type: str | None = Query(default=None),
+    holiday_code: str | None = Query(default=None),
     growth_rate_min: float | None = Query(default=None),
     growth_rate_max: float | None = Query(default=None),
     month_count_min: int | None = Query(default=None),
@@ -192,6 +193,7 @@ def export_preview_count(
             start_month=start_month, end_month=end_month,
             marketplace=marketplace, keyword=keyword, category=category,
             trend_type=trend_type or "",
+            holiday_code=holiday_code,
             search_volume_min=search_volume_min,
             search_volume_max=search_volume_max,
             growth_rate_min=growth_rate_min,
@@ -279,7 +281,8 @@ def export_download(
     source: str = Query(default="candidates", pattern="^(candidates|compare)$"),
     format: str = Query(default="xlsx", pattern="^(xlsx|csv)$"),
     filename: str = Query(default="export"),
-    max_rows: int = Query(default=5000, ge=1, le=20000),
+    max_rows: int = Query(default=20000, ge=1, le=50000),
+    offset: int = Query(default=0, ge=0),
     # candidate filters
     analysis_month: str | None = Query(default=None),
     marketplace: str | None = Query(default=None),
@@ -301,6 +304,7 @@ def export_download(
     start_month: str | None = Query(default=None),
     end_month: str | None = Query(default=None),
     trend_type: str | None = Query(default=None),
+    holiday_code: str | None = Query(default=None),
     growth_rate_min: float | None = Query(default=None),
     growth_rate_max: float | None = Query(default=None),
     month_count_min: int | None = Query(default=None),
@@ -316,6 +320,7 @@ def export_download(
             start_month=start_month, end_month=end_month,
             marketplace=marketplace, keyword=keyword, category=category,
             trend_type=trend_type or "",
+            holiday_code=holiday_code,
             search_volume_min=search_volume_min,
             search_volume_max=search_volume_max,
             growth_rate_min=growth_rate_min,
@@ -326,7 +331,7 @@ def export_download(
             spr_min=spr_min, spr_max=spr_max,
             sort_by=sort_by, sort_order=sort_order,
         )
-        rows = export_comparisons(conn, filters, user_id=current_user["id"], max_rows=max_rows)
+        rows = export_comparisons(conn, filters, user_id=current_user["id"], max_rows=max_rows, offset=offset)
         resolved_start, resolved_end = resolve_keyword_compare_range(conn, filters)
         _enrich_compare_rows_with_holiday_tags(
             conn, rows, marketplace,
@@ -347,7 +352,7 @@ def export_download(
             spr_min=spr_min, spr_max=spr_max,
             sort_by=sort_by, sort_order=sort_order,
         )
-        rows = export_candidates_for_user(conn, filters, user_id=current_user["id"], max_rows=max_rows)
+        rows = export_candidates_for_user(conn, filters, user_id=current_user["id"], max_rows=max_rows, offset=offset)
 
     safe_filename = filename.replace("/", "_").replace("\\", "_")
     if format == "csv":

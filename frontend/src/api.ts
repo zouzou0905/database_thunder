@@ -18,6 +18,9 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `${window.location.pro
 const CANDIDATE_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMPARE_CACHE_TTL_MS = 2 * 60 * 1000;
 const CATEGORY_CACHE_TTL_MS = 10 * 60 * 1000;
+const CANDIDATE_CACHE_MAX_ENTRIES = 80;
+const COMPARE_CACHE_MAX_ENTRIES = 60;
+const CATEGORY_CACHE_MAX_ENTRIES = 30;
 
 interface CacheEntry<T> {
   expiresAt: number;
@@ -31,6 +34,42 @@ const categoryCache = new Map<string, CacheEntry<{ items: CategoryItem[] }>>();
 /** Build a cache key from filters. Page is included so each page caches independently. */
 function filtersCacheKey(params: URLSearchParams): string {
   return params.toString();
+}
+
+function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.data;
+}
+
+function pruneCache<T>(cache: Map<string, CacheEntry<T>>, maxEntries: number): void {
+  const now = Date.now();
+  for (const [key, value] of cache) {
+    if (value.expiresAt <= now) cache.delete(key);
+  }
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) break;
+    cache.delete(oldestKey);
+  }
+}
+
+function setCachedValue<T>(
+  cache: Map<string, CacheEntry<T>>,
+  key: string,
+  data: T,
+  ttlMs: number,
+  maxEntries: number,
+): void {
+  pruneCache(cache, maxEntries - 1);
+  cache.set(key, {
+    expiresAt: Date.now() + ttlMs,
+    data,
+  });
 }
 
 export function clearCandidateCache(): void {
@@ -108,40 +147,34 @@ export async function getMe(): Promise<{ user: User }> {
   return request<{ user: User }>("/auth/me");
 }
 
-export async function getMonths(): Promise<{ items: MonthItem[] }> {
-  return request<{ items: MonthItem[] }>("/meta/months");
+export async function getMonths(signal?: AbortSignal): Promise<{ items: MonthItem[] }> {
+  return request<{ items: MonthItem[] }>("/meta/months", { signal });
 }
 
-export async function getCategories(analysisMonth: string, marketplace: string): Promise<{ items: CategoryItem[] }> {
+export async function getCategories(
+  analysisMonth: string,
+  marketplace: string,
+  signal?: AbortSignal,
+): Promise<{ items: CategoryItem[] }> {
   const params = new URLSearchParams();
   appendParam(params, "analysis_month", analysisMonth);
   appendParam(params, "marketplace", marketplace);
   const cacheKey = params.toString();
-  const cached = categoryCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data;
-  }
-  const data = await request<{ items: CategoryItem[] }>(`/meta/categories?${cacheKey}`);
-  categoryCache.set(cacheKey, {
-    expiresAt: Date.now() + CATEGORY_CACHE_TTL_MS,
-    data,
-  });
+  const cached = getCachedValue(categoryCache, cacheKey);
+  if (cached) return cached;
+  const data = await request<{ items: CategoryItem[] }>(`/meta/categories?${cacheKey}`, { signal });
+  setCachedValue(categoryCache, cacheKey, data, CATEGORY_CACHE_TTL_MS, CATEGORY_CACHE_MAX_ENTRIES);
   return data;
 }
 
-export async function getCandidates(filters: CandidateFilters): Promise<CandidateListResponse> {
+export async function getCandidates(filters: CandidateFilters, signal?: AbortSignal): Promise<CandidateListResponse> {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => appendParam(params, key, value));
   const cacheKey = filtersCacheKey(params);
-  const cached = candidateCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data;
-  }
-  const data = await request<CandidateListResponse>(`/product-selection/candidates?${params.toString()}`);
-  candidateCache.set(cacheKey, {
-    expiresAt: Date.now() + CANDIDATE_CACHE_TTL_MS,
-    data,
-  });
+  const cached = getCachedValue(candidateCache, cacheKey);
+  if (cached) return cached;
+  const data = await request<CandidateListResponse>(`/product-selection/candidates?${params.toString()}`, { signal });
+  setCachedValue(candidateCache, cacheKey, data, CANDIDATE_CACHE_TTL_MS, CANDIDATE_CACHE_MAX_ENTRIES);
   return data;
 }
 
@@ -152,19 +185,17 @@ export async function getCandidateDetail(keywordId: number, analysisMonth: strin
   return request<CandidateDetail>(`/product-selection/candidates/${keywordId}?${params.toString()}`);
 }
 
-export async function getKeywordCompare(filters: KeywordCompareFilters): Promise<KeywordCompareResponse> {
+export async function getKeywordCompare(
+  filters: KeywordCompareFilters,
+  signal?: AbortSignal,
+): Promise<KeywordCompareResponse> {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => appendParam(params, key, value));
   const cacheKey = filtersCacheKey(params);
-  const cached = compareCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data;
-  }
-  const data = await request<KeywordCompareResponse>(`/keyword-compare/keywords?${params.toString()}`);
-  compareCache.set(cacheKey, {
-    expiresAt: Date.now() + COMPARE_CACHE_TTL_MS,
-    data,
-  });
+  const cached = getCachedValue(compareCache, cacheKey);
+  if (cached) return cached;
+  const data = await request<KeywordCompareResponse>(`/keyword-compare/keywords?${params.toString()}`, { signal });
+  setCachedValue(compareCache, cacheKey, data, COMPARE_CACHE_TTL_MS, COMPARE_CACHE_MAX_ENTRIES);
   return data;
 }
 
@@ -272,10 +303,12 @@ export async function createHolidayEvent(payload: {
   min_growth_rate: number;
   terms: string[];
 }): Promise<{ items: HolidayEvent[] }> {
-  return request<{ items: HolidayEvent[] }>("/holiday-lexicon", {
+  const result = await request<{ items: HolidayEvent[] }>("/holiday-lexicon", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  compareCache.clear();
+  return result;
 }
 
 export async function updateHolidayEvent(
@@ -290,40 +323,49 @@ export async function updateHolidayEvent(
     is_active: boolean;
   }>,
 ): Promise<{ items: HolidayEvent[] }> {
-  return request<{ items: HolidayEvent[] }>(`/holiday-lexicon/${id}`, {
+  const result = await request<{ items: HolidayEvent[] }>(`/holiday-lexicon/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+  compareCache.clear();
+  return result;
 }
 
 export async function addHolidayTerms(
   eventId: number,
   terms: string[],
 ): Promise<{ items: HolidayEvent[] }> {
-  return request<{ items: HolidayEvent[] }>(`/holiday-lexicon/${eventId}/terms`, {
+  const result = await request<{ items: HolidayEvent[] }>(`/holiday-lexicon/${eventId}/terms`, {
     method: "POST",
     body: JSON.stringify({ terms, match_type: "auto" }),
   });
+  compareCache.clear();
+  return result;
 }
 
 export async function deleteHolidayTerm(termId: number): Promise<{ items: HolidayEvent[] }> {
-  return request<{ items: HolidayEvent[] }>(`/holiday-lexicon/terms/${termId}`, {
+  const result = await request<{ items: HolidayEvent[] }>(`/holiday-lexicon/terms/${termId}`, {
     method: "DELETE",
   });
+  compareCache.clear();
+  return result;
 }
 
 // ── Holiday tags ──
 
 export async function refreshHolidayTags(marketplace: string = "UK"): Promise<{ ok: boolean; count: number }> {
-  return request<{ ok: boolean; count: number }>(`/holiday-tags/refresh?marketplace=${marketplace}`, {
+  const result = await request<{ ok: boolean; count: number }>(`/holiday-tags/refresh?marketplace=${marketplace}`, {
     method: "POST",
   });
+  compareCache.clear();
+  return result;
 }
 
 // ── Export module ──
 
 export interface ExportFilters {
   source: "candidates" | "compare";
+  offset?: number;
   analysis_month?: string;
   marketplace?: string;
   keyword?: string;
@@ -343,6 +385,7 @@ export interface ExportFilters {
   start_month?: string;
   end_month?: string;
   trend_type?: string;
+  holiday_code?: string;
   growth_rate_min?: string;
   growth_rate_max?: string;
   month_count_min?: string;
@@ -372,22 +415,6 @@ async function downloadBlob(url: string): Promise<Blob> {
     throw new Error(text || `导出失败：${response.status}`);
   }
   return response.blob();
-}
-
-export async function downloadCandidateExport(
-  filters: CandidateFilters,
-  filename = "选品候选词",
-  maxRows = 5000,
-): Promise<Blob> {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => {
-    if (key !== "page" && key !== "page_size") appendParam(params, key, value);
-  });
-  params.set("source", "candidates");
-  params.set("format", "xlsx");
-  params.set("filename", filename);
-  params.set("max_rows", String(maxRows));
-  return downloadBlob(`${API_BASE_URL}/exports/download?${params.toString()}`);
 }
 
 export async function downloadExportFile(
