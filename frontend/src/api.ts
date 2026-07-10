@@ -269,6 +269,14 @@ export async function updateExclusion(
   return result;
 }
 
+export async function deleteExclusion(id: number): Promise<{ deleted: boolean }> {
+  const result = await request<{ deleted: boolean }>(`/exclusions/${id}`, {
+    method: "DELETE",
+  });
+  clearCandidateCache();
+  return result;
+}
+
 export async function getClipboardItems(): Promise<{ items: ClipboardItem[] }> {
   return request<{ items: ClipboardItem[] }>("/clipboard");
 }

@@ -32,6 +32,8 @@
   --shadow: 0 1px 3px rgb(0 0 0 / 0.06);
   --shadow-raised: 0 16px 48px rgb(0 0 0 / 0.13);
   --ease-apple: cubic-bezier(0.4, 0, 0.2, 1);
+  --cursor-text-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='24' viewBox='0 0 16 24'%3E%3Cpath d='M6 3h4M8 3v18M6 21h4' stroke='%231d1d1f' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M8 3v18' stroke='white' stroke-width='.75' stroke-linecap='round' opacity='.9'/%3E%3C/svg%3E") 8 12;
+  --cursor-pointer-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M6 3l12 9-6.2 1.1L9.2 20 6 3z' fill='%231d1d1f' stroke='white' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") 3 2;
 }
 
 * {
@@ -133,6 +135,7 @@ select,
 textarea {
   width: 100%;
   color: var(--foreground);
+  caret-color: var(--foreground);
   background-color: var(--surface-strong);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -147,6 +150,11 @@ input,
 select {
   height: 38px;
   padding: 0 12px;
+}
+
+input,
+textarea {
+  cursor: var(--cursor-text-dark), text;
 }
 
 select {
@@ -165,7 +173,7 @@ select {
   background-repeat: no-repeat, no-repeat;
   background-position: 0 0, right 11px center;
   background-size: 100% 100%, 14px 14px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer-dark), pointer;
 }
 
 textarea {
@@ -269,10 +277,28 @@ select:focus {
   background: var(--accent-hover);
 }
 
+.button.primary.danger {
+  background: var(--danger);
+}
+
+.button.primary.danger:hover {
+  background: #b80012;
+}
+
 .button.secondary {
   color: var(--foreground);
   background: #ffffff;
   border: 1px solid var(--border);
+}
+
+.button.secondary.danger-text {
+  color: var(--danger);
+}
+
+.button.secondary.danger-text:hover {
+  color: #ffffff;
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 .button.ghost {
@@ -665,6 +691,7 @@ select:focus {
   top: 50%;
   left: 11px;
   color: var(--muted-foreground);
+  pointer-events: none;
   transform: translateY(-50%);
 }
 
@@ -687,6 +714,7 @@ select:focus {
 .apple-select {
   position: relative;
   width: 100%;
+  cursor: default;
 }
 
 .apple-select-trigger {
@@ -707,7 +735,7 @@ select:focus {
     inset 0 1px 0 rgb(255 255 255 / 0.92),
     inset 0 -1px 0 rgb(0 0 0 / 0.025),
     0 1px 2px rgb(0 0 0 / 0.035);
-  cursor: pointer;
+  cursor: var(--cursor-pointer-dark), pointer;
   font-size: 13px;
   text-align: left;
   transition:
@@ -735,6 +763,7 @@ select:focus {
 
 .apple-select-trigger span {
   overflow: hidden;
+  cursor: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -742,6 +771,7 @@ select:focus {
 .apple-select-trigger svg {
   flex: 0 0 auto;
   color: var(--muted-foreground);
+  pointer-events: none;
   transition: transform 160ms var(--ease-apple);
 }
 
@@ -783,7 +813,7 @@ select:focus {
   color: var(--foreground);
   background: transparent;
   border-radius: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer-dark), pointer;
   font-size: 13px;
   text-align: left;
 }
@@ -800,12 +830,14 @@ select:focus {
 
 .apple-select-option span {
   overflow: hidden;
+  cursor: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .apple-select-option svg {
   flex: 0 0 auto;
+  pointer-events: none;
 }
 
 .apple-select.compact {
@@ -1395,6 +1427,24 @@ tbody tr:hover {
   margin-top: 2px;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+
+.confirm-toast {
+  align-items: flex-start;
+  min-width: 300px;
+}
+
+.toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.toast-actions .button {
+  min-height: 32px;
+  padding: 0 11px;
+  font-size: 13px;
 }
 
 .query-spinner {

@@ -12,6 +12,7 @@ import {
   clearSession,
   createExclusion,
   createCandidateNote,
+  deleteExclusion,
   getCandidateDetail,
   getCandidates,
   getCategories,
@@ -212,6 +213,7 @@ export function App() {
   const [exclusions, setExclusions] = useState<ExclusionRule[]>([]);
   const [exclusionLoading, setExclusionLoading] = useState(false);
   const [exclusionError, setExclusionError] = useState("");
+  const [pendingDeleteExclusion, setPendingDeleteExclusion] = useState<ExclusionRule | null>(null);
   const [newExclusion, setNewExclusion] = useState<NewExclusion>({
     term: "", match_type: "contains", exclusion_type: "brand", reason: "", is_active: true,
   });
@@ -710,6 +712,27 @@ export function App() {
     }
   }
 
+  async function removeExclusion(rule: ExclusionRule) {
+    setPendingDeleteExclusion(rule);
+  }
+
+  async function confirmRemoveExclusion() {
+    if (!pendingDeleteExclusion) return;
+    const rule = pendingDeleteExclusion;
+    const finishDbOperation = beginDbOperation("正在删除禁用词规则");
+    setPendingDeleteExclusion(null);
+    setExclusionError("");
+    try {
+      await deleteExclusion(rule.id);
+      await loadExclusions();
+      await loadCandidates();
+    } catch (err) {
+      setExclusionError(err instanceof Error ? err.message : "删除禁用词失败");
+    } finally {
+      finishDbOperation();
+    }
+  }
+
   // ── Handlers: detail drawer ─────────────────────────────
 
   // ── Handlers: clipboard ───────────────────────────────────────────────
@@ -1011,6 +1034,7 @@ export function App() {
             onSubmitExclusion={submitExclusion}
             onRefresh={() => void loadExclusions()}
             onToggleExclusion={toggleExclusion}
+            onDeleteExclusion={removeExclusion}
           />
         ) : activeView === "compare" ? (
           <CompareView
@@ -1133,6 +1157,33 @@ export function App() {
           onSaveNote={saveNote}
           onClose={() => setSelected(null)}
         />
+      )}
+
+      {pendingDeleteExclusion && (
+        <div className="query-toast confirm-toast" role="alertdialog" aria-modal="false">
+          <div>
+            <strong>删除禁用词规则？</strong>
+            <small>
+              「{pendingDeleteExclusion.term}」删除后不会再参与机会池排除
+            </small>
+            <div className="toast-actions">
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setPendingDeleteExclusion(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="button primary danger"
+                onClick={() => void confirmRemoveExclusion()}
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {dbOperationCount > 0 && (

@@ -1,4 +1,4 @@
-import { Check, Plus, RefreshCw } from "lucide-react";
+import { Check, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { FormEvent } from "react";
 import type { ExclusionRule } from "../types";
 import { exclusionTypeLabel, formatNumber } from "../utils";
@@ -27,6 +27,7 @@ interface ExclusionsViewProps {
   onSubmitExclusion: (event: FormEvent) => void;
   onRefresh: () => void;
   onToggleExclusion: (rule: ExclusionRule) => void;
+  onDeleteExclusion: (rule: ExclusionRule) => void;
 }
 
 export function ExclusionsView({
@@ -41,6 +42,7 @@ export function ExclusionsView({
   onSubmitExclusion,
   onRefresh,
   onToggleExclusion,
+  onDeleteExclusion,
 }: ExclusionsViewProps) {
   return (
     <section className="admin-grid">
@@ -173,12 +175,24 @@ export function ExclusionsView({
                       {new Date(rule.updated_at).toLocaleString("zh-CN")}
                     </td>
                     <td>
-                      <button
-                        className="button secondary"
-                        onClick={() => onToggleExclusion(rule)}
-                      >
-                        {rule.is_active ? "停用" : "启用"}
-                      </button>
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="button secondary"
+                          onClick={() => onToggleExclusion(rule)}
+                        >
+                          {rule.is_active ? "停用" : "启用"}
+                        </button>
+                        <button
+                          type="button"
+                          className="button secondary danger-text"
+                          onClick={() => onDeleteExclusion(rule)}
+                          title="删除禁用词规则"
+                        >
+                          <Trash2 size={15} />
+                          删除
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

@@ -7,7 +7,7 @@ from psycopg import Connection
 from app.api.deps import get_current_user, require_admin
 from app.core.cache import cached, invalidate
 from app.db import get_connection
-from app.services.exclusions import list_exclusions, update_exclusion, upsert_exclusion
+from app.services.exclusions import delete_exclusion, list_exclusions, update_exclusion, upsert_exclusion
 from app.utils.json import to_jsonable
 
 
@@ -76,3 +76,17 @@ def patch_exclusion(
     invalidate("exclusions")
     invalidate("meta")
     return {"exclusion": to_jsonable(row)}
+
+
+@router.delete("/{exclusion_id}")
+def remove_exclusion(
+    exclusion_id: int,
+    current_user: dict = Depends(require_admin),
+    conn: Connection = Depends(get_connection),
+) -> dict[str, object]:
+    deleted = delete_exclusion(conn, exclusion_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Exclusion not found")
+    invalidate("exclusions")
+    invalidate("meta")
+    return {"deleted": True}

@@ -92,3 +92,17 @@ def update_exclusion(
         row = cur.fetchone()
     conn.commit()
     return row
+
+
+def delete_exclusion(conn: psycopg.Connection, exclusion_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM keyword_selection_exclusions
+            WHERE id = %s
+            """,
+            [exclusion_id],
+        )
+        deleted = cur.rowcount > 0
+    conn.commit()
+    return deleted
